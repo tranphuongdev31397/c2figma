@@ -166,6 +166,28 @@ test('the streamed renderer lays every state out on one page', async () => {
   assert.ok(reactions[0].value[0].actions[0].destinationId);
 });
 
+test('links a transition as soon as both of its states exist', async () => {
+  const reactions = [];
+  const { figma } = fakeFigma(reactions);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8'), {
+    figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, JSON, Error, String
+  });
+
+  const graph = graphFixture();
+  figma.ui.onmessage({ type: 'import-start', spec: { title: 'T' }, pageName: 'Employees' });
+  figma.ui.onmessage({ type: 'import-state', state: graph.states[0], transitions: graph.transitions });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reactions.length, 0, 'the destination state does not exist yet');
+
+  figma.ui.onmessage({ type: 'import-state', state: graph.states[1], transitions: graph.transitions });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reactions.length, 1, 'both ends exist, so the link lands before import-finish');
+
+  figma.ui.onmessage({ type: 'import-finish', graph });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reactions.length, 1, 'the final pass must not re-apply what it already linked');
+});
+
 test('waits for an in-flight render before starting a replacement session', async () => {
   let releaseFirstPage;
   const currentPages = [];

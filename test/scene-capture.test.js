@@ -52,16 +52,20 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
   );
 });
 
-test('leaves room for a second level of exploration', () => {
+test('bounds exploration by depth rather than by a state count', () => {
   const { explorationLimits } = load();
 
-  // ponytail: one screen easily offers maxActionsPerState candidates, so a state budget equal to that
-  // is spent entirely at depth 1 and the second click never happens.
-  assert.ok(
-    explorationLimits.maxStates > explorationLimits.maxActionsPerState,
-    'depth 1 alone can fill the state budget'
-  );
+  // a state cap discards states the run already paid for without shortening the run
+  assert.equal(explorationLimits.maxStates, undefined);
   assert.ok(explorationLimits.maxDepth >= 2);
+  assert.ok(explorationLimits.maxActionsPerState > 0);
+});
+
+test('reports attempted paths, not only discovered states', () => {
+  // most paths dedupe away, so a states-only counter sits still while the run is busy
+  assert.match(source, /onProgress/);
+  assert.match(source, /attempted/);
+  assert.match(source, /planned/);
 });
 
 test('the interactive path waits for the same profile as the static path', () => {

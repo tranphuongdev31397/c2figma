@@ -163,11 +163,15 @@
         selected.scene ||= state.scene;
         const layers=graph.states.reduce((total,item)=>total+item.scene.nodes.length,0);
         $('stats').textContent=graph.states.length+' state · '+layers+' layers';
-        $('status').textContent='Đang khám phá '+graph.states.length+'/'+explorationLimits.maxStates+' state'+(selected.directStarted?' và gửi sang Figma…':'…');
-        if (selected.directStarted) postToFigma({type:'import-state',state});
+        if (selected.directStarted) postToFigma({type:'import-state',state,transitions:graph.transitions});
+      };
+      // most paths dedupe into an existing state, so a states-only counter looks stuck mid-run
+      const onProgress = ({attempted, planned, states}) => {
+        if (selected.file !== file) return;
+        $('status').textContent='Đang thử '+attempted+'/'+planned+' tương tác · '+states+' state'+(selected.directStarted?' — đang gửi sang Figma…':'…');
       };
       try {
-        const graph=await captureStateGraph(html,{},onState);
+        const graph=await captureStateGraph(html,{onProgress},onState);
         if (selected.file !== file) return;
         selected.graph=graph; selected.scene ||= graph.states[0]?.scene; selected.captureDone=true;
         $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+file.name;
@@ -184,7 +188,7 @@
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; $('download').disabled=false; selected.started=false; }
       }
     }
-    $('state-limit').textContent='(tối đa '+explorationLimits.maxStates+')';
+    $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp)';
     $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)show(file,await file.text());});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
     $('download').addEventListener('click', start);

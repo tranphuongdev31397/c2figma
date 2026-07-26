@@ -336,7 +336,9 @@
     })));
   }
 
-  const LIMITS = { maxDepth: 2, maxStates: 24, maxActionsPerState: 8 };
+  // ponytail: depth is the real ceiling — it bounds how many paths run, and paths are what cost time.
+  // A separate state cap only discarded states the run had already paid for.
+  const LIMITS = { maxDepth: 2, maxActionsPerState: 8 };
 
   function captureStateGraph(html, options = {}, onState) {
     const profile = settleProfileFor(html);
@@ -374,12 +376,23 @@
       const graph = { version: 2, viewport: { width: settings.width, height: settings.height }, states: [], transitions: [] };
       const fingerprintToState = new Map();
       const transitionKeys = new Set();
-      const baseline = await runPath([]);
+      // most paths dedupe into a state that already exists, so state count alone looks frozen for
+      // long stretches; report attempted paths too.
+      const progress = { attempted: 0, planned: 1 };
+      const report = () => settings.onProgress && settings.onProgress({
+        attempted: progress.attempted, planned: progress.planned, states: graph.states.length
+      });
+      const attempt = async actionPath => {
+        try { return await runPath(actionPath); }
+        catch (_) { return null; }
+        finally { progress.attempted += 1; report(); }
+      };
+      const baseline = await attempt([]);
+      if (!baseline) throw new Error('Không dựng được layout gốc.');
       const addState = async (actionPath, result, label) => {
         const fingerprint = sceneFingerprint(result.scene);
         let state = fingerprintToState.get(fingerprint);
         if (!state) {
-          if (graph.states.length >= settings.maxStates) return null;
           state = { id: 'state-' + String(graph.states.length).padStart(2, '0'), label, actionPath, scene: result.scene };
           fingerprintToState.set(fingerprint, state);
           graph.states.push(state);
@@ -388,17 +401,24 @@
         return state;
       };
       const first = await addState([], baseline, 'Default');
-      const queue = [{ state: first, actions: baseline.actions, depth: 0 }];
+      const enqueue = (queue, state, actions, depth) => {
+        if (depth >= settings.maxDepth) return;
+        progress.planned += Math.min(actions.length, settings.maxActionsPerState);
+        queue.push({ state, actions, depth });
+        report();
+      };
+      const queue = [];
+      enqueue(queue, first, baseline.actions, 0);
       const expanded = new Set();
-      while (queue.length && graph.states.length < settings.maxStates) {
+      while (queue.length) {
         const current = queue.shift();
-        if (!current.state || current.depth >= settings.maxDepth) continue;
+        if (!current.state) continue;
         if (expanded.has(current.state.id)) continue;
         expanded.add(current.state.id);
         for (const action of current.actions.slice(0, settings.maxActionsPerState)) {
           const actionPath = current.state.actionPath.concat(action.key);
-          let result;
-          try { result = await runPath(actionPath); } catch (_) { continue; }
+          const result = await attempt(actionPath);
+          if (!result) continue;
           const destination = await addState(actionPath, result, action.label || action.key);
           if (!destination) continue;
           const transitionKey = [current.state.id, destination.id, action.key].join('|');
@@ -406,7 +426,7 @@
             transitionKeys.add(transitionKey);
             graph.transitions.push({ from: current.state.id, to: destination.id, actionKey: action.key, trigger: 'ON_CLICK' });
           }
-          if (!expanded.has(destination.id)) queue.push({ state: destination, actions: result.actions, depth: current.depth + 1 });
+          if (!expanded.has(destination.id)) enqueue(queue, destination, result.actions, current.depth + 1);
         }
       }
       return graph;

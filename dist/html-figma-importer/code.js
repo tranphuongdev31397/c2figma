@@ -96,16 +96,24 @@ async function renderState(state, title, pageName, target) {
 
 const transitionTriggers = new Set(['ON_CLICK', 'ON_HOVER', 'ON_PRESS', 'ON_DRAG', 'ON_KEY_DOWN', 'ON_KEY_UP', 'AFTER_TIMEOUT', 'MOUSE_ENTER', 'MOUSE_LEAVE']);
 
-async function applyTransitions(graph, renderedStates) {
+const transitionKey = transition => [transition.from, transition.to, transition.actionKey].join('|');
+
+// `pending` mode wires only the transitions whose two ends already exist and leaves the rest for a
+// later pass, so links appear alongside the pages instead of all at once when exploration ends.
+async function applyTransitions(transitions, renderedStates, done, pending) {
   let applied = 0;
   let skipped = 0;
-  for (const transition of graph.transitions || []) {
+  for (const transition of transitions || []) {
+    const key = transitionKey(transition);
+    if (done && done.has(key)) continue;
     const source = renderedStates.get(transition.from);
     const destination = renderedStates.get(transition.to);
     const sourceNode = source?.actionNodes.get(transition.actionKey);
     const trigger = transition.trigger || 'ON_CLICK';
+    if (pending && (!sourceNode || !destination?.root)) continue;
     if (!sourceNode || !destination?.root || !transitionTriggers.has(trigger)) {
       skipped += 1;
+      if (done) done.add(key);
       continue;
     }
     try {
@@ -123,14 +131,17 @@ async function applyTransitions(graph, renderedStates) {
         }]
       }]);
       applied += 1;
+      if (done) done.add(key);
     } catch (error) {
       skipped += 1;
+      if (done) done.add(key);
     }
   }
   if (skipped) {
     figma.notify('Skipped ' + skipped + ' prototype transitions.', { error: true });
     figma.ui.postMessage({ type: 'transition-skipped', skipped });
   }
+  if (applied) figma.ui.postMessage({ type: 'transition-progress', applied });
   return { applied, skipped };
 }
 
@@ -142,6 +153,7 @@ const sessionFor = ({ spec, pageName } = {}) => {
     states: new Map(),
     rendered: new Map(),
     target: { page: null, offsetX: 0 },
+    linked: new Set(),
     queue: Promise.resolve(),
     failed: false
   };
@@ -164,7 +176,7 @@ async function renderGraph(graph, title, pageName) {
     await renderOneState(graph.states[index], current);
     figma.ui.postMessage({ type: 'state-progress', current: index + 1, total: graph.states.length, title: current.title });
   }
-  await applyTransitions(graph, current.rendered);
+  await applyTransitions(graph.transitions, current.rendered, current.linked);
   return current;
 }
 
@@ -217,6 +229,7 @@ figma.ui.onmessage = message => {
       try {
         const rendered = await renderOneState(message.state, current);
         if (rendered) figma.ui.postMessage({ type: 'state-progress', current: current.rendered.size, total: current.states.size, title: current.title });
+        await applyTransitions(message.transitions, current.rendered, current.linked, true);
       } catch (error) {
         if (baseline) reportFatal(error, current);
         else reportStateError(message.state, error);
@@ -228,7 +241,7 @@ figma.ui.onmessage = message => {
     const current = session;
     enqueue(current, async () => {
       try {
-        await applyTransitions(message.graph, current.rendered);
+        await applyTransitions(message.graph?.transitions, current.rendered, current.linked);
         finishSession(current);
       } catch (error) {
         reportFatal(error, current);
