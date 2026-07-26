@@ -1,10 +1,20 @@
 const solid = (value, opacity = 1) => ({ type: 'SOLID', color: { r: value.r, g: value.g, b: value.b }, opacity: (value.a ?? 1) * opacity });
 const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold' : 'Regular';
 
-async function renderScene(scene, title) {
+const uniquePageName = base => {
+  const wanted = String(base || 'Imported HTML').trim() || 'Imported HTML';
+  const names = new Set(figma.root.children.map(page => page.name));
+  if (!names.has(wanted)) return wanted;
+  let index = 2;
+  while (names.has(wanted + ' ' + index)) index += 1;
+  return wanted + ' ' + index;
+};
+const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
+
+async function renderScene(scene, title, pageName) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   const page = figma.createPage();
-  page.name = 'HTML Visual • ' + title;
+  page.name = uniquePageName(pageName || title);
   const root = figma.createFrame();
   root.name = 'Screen / ' + title;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
@@ -15,7 +25,9 @@ async function renderScene(scene, title) {
   const bounds = new Map([['__root__', { x: 0, y: 0 }]]);
   const positioned = [];
 
-  for (const item of scene.nodes) {
+  await figma.setCurrentPageAsync(page);
+  for (let index = 0; index < scene.nodes.length; index += 1) {
+    const item = scene.nodes[index];
     const parent = byId.get(item.parentId) || root;
     const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
     const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
@@ -55,10 +67,13 @@ async function renderScene(scene, title) {
     if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({ parent, node });
     byId.set(item.id, node);
     bounds.set(item.id, { x: item.x, y: item.y });
+    if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) {
+      figma.ui.postMessage({ type: 'progress', current: index + 1, total: scene.nodes.length, title });
+      await yieldToFigma();
+    }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
-  await figma.setCurrentPageAsync(page);
-  figma.closePlugin('Đã tạo design editable từ HTML.');
+  return page.name;
 }
 
 figma.showUI(__html__, { width: 720, height: 620 });
@@ -66,9 +81,10 @@ figma.ui.onmessage = async message => {
   if (message.type !== 'import') return;
   try {
     const title = message.spec?.title || 'Imported HTML';
-    await renderScene(message.scene, title);
+    const pageName = await renderScene(message.scene, title, message.pageName || message.spec?.pageName || title);
     figma.notify('Đã tạo design editable trong Figma.');
-    figma.ui.postMessage({ type: 'imported', title });
+    figma.ui.postMessage({ type: 'imported', title, pageName });
+    figma.closePlugin('Đã tạo design editable từ HTML.');
   } catch (error) {
     figma.notify('Không thể tạo design: ' + error.message, { error: true });
     figma.ui.postMessage({ type: 'error', message: error.message });

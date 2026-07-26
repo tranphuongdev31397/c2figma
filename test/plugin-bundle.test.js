@@ -15,7 +15,10 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /button, \.button\s*\{/);
   assert.match(bundle.ui, /captureSceneGraph/);
   assert.match(bundle.ui, /function pluginCode/);
-  assert.match(bundle.ui, /pluginCode\(selected\.scene\)/);
+  assert.match(bundle.ui, /pluginCode\(selected\.scene, selected\.pageName/);
+  assert.match(bundle.ui, /id="page-name"/);
+  assert.match(bundle.ui, /selected\.pageName/);
+  assert.ok(bundle.ui.includes("replace(/\\.[^.]+$/, '')"));
   assert.match(bundle.ui, /name:'scene\.json'/);
   assert.match(bundle.ui, /allow-same-origin/);
   assert.match(bundle.ui, /__bundler_/);
@@ -24,6 +27,10 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.doesNotMatch(bundle.ui, /<script src="\/(?:scene-capture|plugin-code)\.js"><\/script>/);
   assert.match(bundle.code, /renderScene/);
   assert.match(bundle.code, /message\.scene/);
+  assert.match(bundle.code, /uniquePageName/);
+  assert.match(bundle.code, /message\.pageName/);
+  assert.match(bundle.code, /type:\s*['"]progress/);
+  assert.match(bundle.code, /setTimeout/);
   assert.doesNotMatch(bundle.code, /Generated visual scaffold/);
   assert.doesNotMatch(bundle.code, /Primary action/);
 });

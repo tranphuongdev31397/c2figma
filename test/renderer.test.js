@@ -38,3 +38,11 @@ test('renders border weights independently per side', () => {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /strokeBottomWeight/);
   }
 });
+
+test('uses a collision-safe page name and yields progress while rendering', () => {
+  for (const file of renderers) {
+    const source = fs.readFileSync(require.resolve(file), 'utf8');
+    assert.match(source, /uniquePageName/);
+    assert.match(source, /setTimeout/);
+  }
+});
