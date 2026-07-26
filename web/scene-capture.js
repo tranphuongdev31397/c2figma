@@ -25,7 +25,10 @@
       };
 
       window.addEventListener('message', onMessage);
-      iframe.setAttribute('sandbox', 'allow-scripts');
+      // ponytail: Claude bundles need same-origin to hydrate their internal blob resources;
+      // keep the broader sandbox for ordinary HTML instead of weakening every upload.
+      const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
+      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
       iframe.setAttribute('aria-hidden', 'true');
       iframe.style.cssText = [
         'position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px',
@@ -53,6 +56,8 @@
       };
       const number = value => Number.parseFloat(value) || 0;
       const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= width && rect.top <= height;
+      const technical = element => element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]');
+      const payload = value => /(?:data:)?(?:text\/html|application\/json);base64,/i.test(value) || /^[A-Za-z0-9+/]{240,}={0,2}$/.test(value);
       const nodes = [];
       const ids = new Map();
       const elements = [...document.querySelectorAll('*')].filter(element => !ignored.has(element.tagName));
@@ -60,7 +65,7 @@
       for (const element of elements) {
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
-        if (!visible(element, style, rect) || nodes.length >= 2000) continue;
+        if (!visible(element, style, rect) || technical(element) || nodes.length >= 2000) continue;
         const id = 'n' + nodes.length;
         ids.set(element, id);
         let parent = element.parentElement;
@@ -92,6 +97,7 @@
           const range = document.createRange();
           range.selectNodeContents(child);
           const text = child.data.replace(/\s+/g, ' ').trim();
+          if (payload(text)) continue;
           for (const textRect of [...range.getClientRects()]) {
             if (!text || textRect.width <= 0 || textRect.height <= 0) continue;
             nodes.push({

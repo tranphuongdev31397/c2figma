@@ -17,6 +17,9 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /function pluginCode/);
   assert.match(bundle.ui, /pluginCode\(selected\.scene\)/);
   assert.match(bundle.ui, /name:'scene\.json'/);
+  assert.match(bundle.ui, /allow-same-origin/);
+  assert.match(bundle.ui, /__bundler_/);
+  assert.match(bundle.ui, /base64/);
   assert.doesNotMatch(bundle.ui, /<script src="\/(?:scene-capture|plugin-code)\.js"><\/script>/);
   assert.match(bundle.code, /renderScene/);
   assert.match(bundle.code, /message\.scene/);
