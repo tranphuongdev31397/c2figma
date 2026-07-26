@@ -108,11 +108,32 @@
       ].join(';');
       document.body.appendChild(iframe);
 
-      const script = 'setTimeout(() => (' + serializeScene.toString() + ')(' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + '), 1200);';
+      const minimumDelay = needsBundleCompatibility ? 3000 : 600;
+      const script = '(' + captureWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + minimumDelay + ');';
       const probe = '<script>' + script + '<\/script>';
       iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
       timer = setTimeout(() => finish(reject, new Error('Không thể dựng layout HTML trong thời gian cho phép.')), settings.timeout);
     });
+  }
+
+  function captureWhenStable(serialize, token, width, height, minimumDelay) {
+    const started = Date.now();
+    let previous = '';
+    let stableTicks = 0;
+    const check = () => {
+      const body = document.body;
+      const signature = [
+        document.readyState,
+        document.querySelectorAll('*').length,
+        (body ? body.innerText : '').replace(/\s+/g, ' ').slice(0, 1000)
+      ].join('|');
+      if (signature === previous) stableTicks += 1;
+      else { previous = signature; stableTicks = 0; }
+      if (Date.now() - started >= minimumDelay && stableTicks >= 3) return serialize(token, width, height);
+      if (Date.now() - started >= 10000) return serialize(token, width, height);
+      setTimeout(check, 250);
+    };
+    setTimeout(check, 100);
   }
 
   function serializeScene(token, width, height) {
