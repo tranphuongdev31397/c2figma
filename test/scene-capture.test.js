@@ -8,4 +8,5 @@ test('waits for the rendered DOM to settle before serializing a bundled page', (
   assert.match(source, /captureWhenStable/);
   assert.match(source, /stableTicks/);
   assert.match(source, /__bundler.*manifest/);
+  assert.match(source, /borderBottomColor/);
 });

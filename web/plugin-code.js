@@ -34,7 +34,7 @@ async function renderScene(scene, title) {
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
-      node.textAutoResize = 'NONE';
+      node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else {
       node.layoutMode = 'NONE';
       paint(node, item.fill, 1);

@@ -107,7 +107,12 @@
         ids.set(element, id);
         let parent = element.parentElement;
         while (parent && !ids.has(parent)) parent = parent.parentElement;
-        const borderWidth = Math.max(number(style.borderTopWidth), number(style.borderRightWidth), number(style.borderBottomWidth), number(style.borderLeftWidth));
+        const border = [
+          { width: number(style.borderTopWidth), color: style.borderTopColor },
+          { width: number(style.borderRightWidth), color: style.borderRightColor },
+          { width: number(style.borderBottomWidth), color: style.borderBottomColor },
+          { width: number(style.borderLeftWidth), color: style.borderLeftColor }
+        ].reduce((best, side) => side.width >= best.width ? side : best, { width: 0, color: '' });
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
         nodes.push({
           id,
@@ -119,8 +124,8 @@
           width: rect.width,
           height: rect.height,
           fill: parseColor(style.backgroundColor),
-          stroke: borderWidth ? parseColor(style.borderTopColor) : null,
-          strokeWidth: borderWidth,
+          stroke: border.width ? parseColor(border.color) : null,
+          strokeWidth: border.width,
           radius,
           opacity: Number(style.opacity) || 1,
           text: '',

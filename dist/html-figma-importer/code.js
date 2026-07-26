@@ -31,7 +31,7 @@ async function renderScene(scene, title) {
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(item.color || { r: .1, g: .1, b: .1 })];
-      node.textAutoResize = 'NONE';
+      node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else {
       node.layoutMode = 'NONE';
       node.fills = item.fill ? [solid(item.fill)] : [];
