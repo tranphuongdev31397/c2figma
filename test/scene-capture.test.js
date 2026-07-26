@@ -39,3 +39,19 @@ test('captures border widths per side instead of flattening them', () => {
   assert.match(source, /top: \{ width: number\(style\.borderTopWidth\)/);
   assert.match(source, /bottom: \{ width: number\(style\.borderBottomWidth\)/);
 });
+
+test('exposes the bounded interactive state graph contract', () => {
+  assert.match(source, /captureStateGraph/);
+  assert.match(source, /onState/);
+  assert.match(source, /actionKey/);
+  assert.match(source, /transitions/);
+  assert.match(source, /data-c2figma-action-key/);
+  assert.match(source, /maxActionsPerState/);
+  assert.match(source, /fingerprintToState/);
+});
+
+test('replays actions by stable key instead of candidate index', () => {
+  assert.match(source, /actionKeyFor/);
+  assert.match(source, /find\(.*\.key.*actionPath/);
+  assert.doesNotMatch(source, /candidates\[actionPath\[/);
+});
