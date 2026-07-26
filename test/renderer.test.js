@@ -46,3 +46,13 @@ test('uses a collision-safe page name and yields progress while rendering', () =
     assert.match(source, /setTimeout/);
   }
 });
+
+test('direct renderer accepts streamed states and links prototype actions', () => {
+  const source = fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8');
+
+  for (const term of ['import-start', 'import-state', 'import-finish', 'setReactionsAsync', 'actionNodes', 'destinationId', 'ON_CLICK']) {
+    assert.match(source, new RegExp(term));
+  }
+  assert.match(source, /transition.*skipped/i);
+  assert.match(source, /message\.type\s*!==\s*['"]import['"]/);
+});

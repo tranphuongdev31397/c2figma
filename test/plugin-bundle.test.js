@@ -39,6 +39,8 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.code, /message\.pageName/);
   assert.match(bundle.code, /type:\s*['"]progress/);
   assert.match(bundle.code, /setTimeout/);
+  assert.match(bundle.code, /import-start/);
+  assert.match(bundle.code, /setReactionsAsync/);
   assert.doesNotMatch(bundle.code, /Generated visual scaffold/);
   assert.doesNotMatch(bundle.code, /Primary action/);
 });
