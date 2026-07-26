@@ -178,7 +178,7 @@
       const onProgress = ({attempted, planned, states}) => {
         if (selected.file !== file) return;
         $('status').textContent='Đang thử '+attempted+'/'+planned+' tương tác · '+states+' state'
-          +(degraded?' · '+degraded+' lần không về được trạng thái gốc':'')
+          +(degraded?' · '+degraded+' lần phải tải lại iframe':'')
           +(selected.directStarted?' — đang gửi sang Figma…':'…');
       };
       const onNotice = notice => { if (notice.type === 'reuse-degraded') degraded = notice.degraded; };
@@ -188,7 +188,7 @@
         selected.graph=graph; selected.scene ||= graph.states[0]?.scene; selected.captureDone=true;
         const capture=graph.capture||{};
         $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+capture.attempted+' tương tác'
-          +(capture.degraded?' — '+capture.degraded+' lần chụp sau khi không về được trạng thái gốc (đáng ngờ)':'');
+          +(capture.degraded?' — '+capture.degraded+' lần phải tải lại iframe để về trạng thái gốc':'');
         if (selected.directStarted) postToFigma({type:'import-finish',graph});
         else deliver();
       } catch (error) {

@@ -156,6 +156,7 @@
           borders: border,
           radius,
           position: style.position,
+          zIndex: style.zIndex,
           overflow: style.overflow,
           opacity: Number(style.opacity) || 1,
           text: '',
@@ -337,15 +338,38 @@
     const snapshot = () => fingerprint(serialize('', width, height));
     let baseline = null;
 
+    // ponytail: a dialog that advertises itself with a class or aria-label is the easy half. This app
+    // renders its sheet as inline-styled divs with neither, so the backdrop has to be found by shape —
+    // a viewport-sized positioned layer sitting over the page — and clicked.
+    const dismissers = () => {
+      const covering = element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width >= innerWidth * 0.9 && rect.height >= innerHeight * 0.9;
+      };
+      const backdrops = [...document.body.querySelectorAll('*')].filter(element => {
+        const position = getComputedStyle(element).position;
+        return (position === 'fixed' || position === 'absolute') && covering(element) && tools.visible(element);
+      }).reverse();
+      const labelled = [...document.querySelectorAll('[data-close],[data-dismiss],[aria-label*="close" i],[aria-label*="đóng" i],[class*="close" i],[class*="backdrop" i],[class*="overlay" i]')]
+        .filter(element => tools.visible(element));
+      return [...backdrops, ...labelled];
+    };
+
     const resetToBaseline = async () => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         if (snapshot() === baseline) return true;
-        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-        const closers = [...document.querySelectorAll('[data-close],[data-dismiss],[aria-label*="close" i],[aria-label*="đóng" i],[class*="close" i],[class*="backdrop" i],[class*="overlay" i]')]
-          .filter(element => tools.visible(element));
-        for (const closer of closers.slice(0, 4)) closer.click();
+        // Escape has to bubble up from the focused element — frameworks listen on their own root, and
+        // a keydown dispatched straight at `document` never reaches it.
+        for (const target of [document.activeElement || document.body, document]) {
+          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+        }
         await tools.settleAfterAction();
+        for (const dismisser of dismissers().slice(0, 4)) {
+          if (snapshot() === baseline) return true;
+          dismisser.click();
+          await tools.settleAfterAction();
+        }
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       }
       return snapshot() === baseline;
     };
@@ -444,11 +468,12 @@
       const token = newToken('reuse');
       const iframe = makeIframe(token);
       const waiting = new Map();
+      const probe = '(' + reusableProbe.toString() + ')((' + interactionToolkit.toString() + '),(' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),(' + sceneFingerprint.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + profile.minimumDelay + ');';
       let requestIds = 0;
       let degraded = 0;
+      let ready;
       let resolveReady;
       let rejectReady;
-      const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
       const onMessage = event => {
         const data = event.data;
         if (event.source !== iframe.contentWindow || !data || data.token !== token) return;
@@ -460,28 +485,41 @@
         }
         waiting.delete(data.requestId);
         clearTimeout(pending.timer);
-        if (data.type === 'html-figma-state') {
-          if (data.degraded) { degraded += 1; if (settings.onNotice) settings.onNotice({ type: 'reuse-degraded', degraded }); }
-          pending.resolve(data);
-        }
+        if (data.type === 'html-figma-state') pending.resolve(data);
         if (data.type === 'html-figma-state-error') pending.reject(new Error(data.message));
+      };
+      // re-assigning srcdoc reloads the page, which is the one reset that always works
+      const boot = () => {
+        ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+        const readyTimer = setTimeout(() => rejectReady(new Error('Reused iframe không sẵn sàng.')), profile.timeoutMs);
+        ready.then(() => clearTimeout(readyTimer), () => clearTimeout(readyTimer));
+        inject(iframe, probe);
+        return ready;
       };
       window.addEventListener('message', onMessage);
       document.body.appendChild(iframe);
-      inject(iframe, '(' + reusableProbe.toString() + ')((' + interactionToolkit.toString() + '),(' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),(' + sceneFingerprint.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + profile.minimumDelay + ');');
-      const readyTimer = setTimeout(() => rejectReady(new Error('Reused iframe không sẵn sàng.')), profile.timeoutMs);
-      ready.then(() => clearTimeout(readyTimer), () => clearTimeout(readyTimer));
+      boot();
+      const send = actionPath => {
+        const requestId = requestIds += 1;
+        const result = new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { waiting.delete(requestId); reject(new Error('State capture timed out.')); }, settings.stateTimeoutMs);
+          waiting.set(requestId, { resolve, reject, timer });
+        });
+        iframe.contentWindow.postMessage({ type: 'run-path', token, requestId, actionPath }, '*');
+        return result;
+      };
 
       return {
         run: async actionPath => {
           await ready;
-          const requestId = requestIds += 1;
-          const result = new Promise((resolve, reject) => {
-            const timer = setTimeout(() => { waiting.delete(requestId); reject(new Error('State capture timed out.')); }, settings.stateTimeoutMs);
-            waiting.set(requestId, { resolve, reject, timer });
-          });
-          iframe.contentWindow.postMessage({ type: 'run-path', token, requestId, actionPath }, '*');
-          return result;
+          const result = await send(actionPath);
+          if (!result.degraded) return result;
+          // a probe that could not undo the previous path captured that leftover, not this path — so
+          // every state after it is a lie. Reload and take the path again from a real baseline.
+          degraded += 1;
+          if (settings.onNotice) settings.onNotice({ type: 'reuse-degraded', degraded });
+          await boot();
+          return send(actionPath);
         },
         dispose: () => { window.removeEventListener('message', onMessage); iframe.remove(); },
         degradedCount: () => degraded

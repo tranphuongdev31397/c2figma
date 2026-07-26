@@ -14,6 +14,10 @@ const uniquePageName = base => { const wanted=String(base || 'Imported HTML').tr
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 const post = payload => { try { figma.ui.postMessage(payload); } catch (error) {} };
 const STATE_GAP = 160;
+// Figma has no z-index: a dropdown left nested in its container paints under whatever that container
+// draws next. Hoist z-indexed layers to the frame, ordered by their stacking ancestors then own level.
+const stackLevel = item => { const level = Number.parseInt(item.zIndex, 10); return (item.position === 'absolute' || item.position === 'fixed') && Number.isFinite(level) ? level : null; };
+const compareStack = (a, b) => { for (let i = 0; i < Math.max(a.zPath.length, b.zPath.length); i += 1) { const l = a.zPath[i], r = b.zPath[i]; if (l === r) continue; if (l === undefined) return -1; if (r === undefined) return 1; return l - r; } return a.index - b.index; };
 async function renderScene(scene, title, pageName, target) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   let page = target && target.page;
@@ -30,11 +34,16 @@ async function renderScene(scene, title, pageName, target) {
   const bounds = new Map([['__root__', {x:0,y:0}]]);
   const actionNodes = new Map();
   const positioned = [];
+  const overlays = [];
+  const zPaths = new Map([['__root__', []]]);
   await figma.setCurrentPageAsync(page);
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
-    const parent = byId.get(item.parentId) || root;
-    const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
+    const level = stackLevel(item);
+    const zPath = level === null ? (zPaths.get(item.parentId) || []) : (zPaths.get(item.parentId) || []).concat(level);
+    zPaths.set(item.id, zPath);
+    const parent = level === null ? byId.get(item.parentId) || root : root;
+    const parentBounds = level === null ? bounds.get(item.parentId) || bounds.get('__root__') : bounds.get('__root__');
     const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
     node.name = item.name || item.kind;
     node.x = Math.round(item.x - parentBounds.x);
@@ -67,13 +76,16 @@ async function renderScene(scene, title, pageName, target) {
       if (item.radius) node.cornerRadius = item.radius;
     }
     parent.appendChild(node);
-    if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({parent,node});
+    if (level !== null) overlays.push({zPath,index,node});
+    else if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({parent,node});
     if (item.actionKey) actionNodes.set(item.actionKey, node);
     byId.set(item.id, node);
     bounds.set(item.id, {x:item.x, y:item.y});
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) { post({type:'progress', current:index + 1, total:scene.nodes.length, title}); await yieldToFigma(); }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
+  overlays.sort(compareStack);
+  for (const item of overlays) root.appendChild(item.node);
   if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
   return {page, root, actionNodes, pageName:page.name};
 }

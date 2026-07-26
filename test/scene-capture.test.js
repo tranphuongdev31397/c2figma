@@ -72,14 +72,36 @@ test('offers a reused-iframe mode without making it the default', () => {
   assert.match(source, /reuse-degraded/);
 });
 
+test('finds a dialog to dismiss by shape, not by the class it may not have', () => {
+  // the sheet in the real page is inline-styled divs: no class, no aria-label, and Escape does nothing.
+  // Only a viewport-sized positioned layer identifies the backdrop that closes it.
+  assert.match(source, /dismissers/);
+  assert.match(source, /innerWidth \* 0\.9/);
+  assert.match(source, /position === 'fixed' \|\| position === 'absolute'/);
+  assert.match(source, /document\.activeElement \|\| document\.body/);
+});
+
+test('reloads the reused iframe instead of capturing a leftover modal', () => {
+  // a path replayed on top of the previous path's modal is not that path, so its state is worthless
+  assert.match(source, /const boot = /);
+  assert.match(source, /await boot\(\);\s*\n\s*return send\(actionPath\)/);
+});
+
+test('captures z-index so the renderer can rebuild stacking order', () => {
+  assert.match(source, /zIndex: style\.zIndex/);
+});
+
 test('both probes serialize into valid injectable scripts', () => {
   // the probes reach the iframe as source text, so a syntax slip only shows up at run time
   const scope = { window: {}, document: { createElement: () => ({ setAttribute() {}, style: {} }) } };
   scope.window.document = scope.document;
   vm.runInNewContext(source, scope);
 
-  const injected = [...source.matchAll(/inject\(iframe, '\(' \+ (\w+)\.toString\(\)/g)].map(match => match[1]);
-  assert.deepEqual(injected.sort(), ['captureInteractivePath', 'reusableProbe']);
+  const injected = [...new Set([...source.matchAll(/\+ (\w+)\.toString\(\)/g)].map(match => match[1]))];
+  assert.deepEqual(injected.sort(), [
+    'actionKeyFor', 'captureInteractivePath', 'captureWhenStable',
+    'interactionToolkit', 'reusableProbe', 'sceneFingerprint', 'serializeScene'
+  ]);
 
   for (const probe of injected) {
     const body = source.match(new RegExp('\\n  function ' + probe + '\\([\\s\\S]*?\\n  \\}\\n'));

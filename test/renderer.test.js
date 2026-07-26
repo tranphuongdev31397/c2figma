@@ -27,6 +27,76 @@ test('raises positioned layers above normal siblings', () => {
   }
 });
 
+test('hoists z-indexed layers out of the container that would bury them', () => {
+  for (const file of renderers) {
+    const source = fs.readFileSync(require.resolve(file), 'utf8');
+    assert.match(source, /stackLevel/, file + ' must detect z-indexed overlays');
+    assert.match(source, /compareStack/, file + ' must order overlays by stacking level');
+  }
+});
+
+// A dropdown is absolute + z-index inside a table container; the sheet is a fixed portal. Both have to
+// end up above what follows them in the DOM, and a menu inside the sheet above the sheet.
+const stackingScene = () => ({
+  version: 1,
+  viewport: { width: 1440, height: 900 },
+  nodes: [
+    { id: 'panel', parentId: '__root__', kind: 'frame', name: 'panel', x: 0, y: 0, width: 1400, height: 800, position: 'relative', zIndex: 'auto', overflow: 'hidden' },
+    { id: 'wrap', parentId: 'panel', kind: 'frame', name: 'fc-wrap', x: 400, y: 100, width: 100, height: 30, position: 'relative', zIndex: 'auto' },
+    { id: 'drop', parentId: 'wrap', kind: 'frame', name: 'fc-drop', x: 411, y: 139, width: 243, height: 118, position: 'absolute', zIndex: '50' },
+    { id: 'cell', parentId: 'panel', kind: 'frame', name: 'Cell', x: 25, y: 197, width: 495, height: 65, position: 'static', zIndex: 'auto' },
+    { id: 'portal', parentId: '__root__', kind: 'frame', name: 'portal', x: 0, y: 0, width: 1440, height: 900, position: 'fixed', zIndex: '60' },
+    { id: 'backdrop', parentId: 'portal', kind: 'frame', name: 'backdrop', x: 0, y: 0, width: 1440, height: 900, position: 'absolute', zIndex: 'auto' },
+    { id: 'sheet', parentId: 'portal', kind: 'frame', name: 'sheet', x: 868, y: 12, width: 560, height: 876, position: 'absolute', zIndex: 'auto' },
+    { id: 'menu', parentId: 'sheet', kind: 'frame', name: 'sheet menu', x: 900, y: 200, width: 200, height: 100, position: 'absolute', zIndex: '50' }
+  ]
+});
+
+test('renders a dropdown above the table it overlaps, and a dialog above both', async () => {
+  let ids = 0;
+  const node = () => ({
+    id: 'node-' + (ids += 1),
+    name: '',
+    children: [],
+    owner: null,
+    appendChild(child) {
+      if (child.owner) child.owner.children.splice(child.owner.children.indexOf(child), 1);
+      child.owner = this;
+      this.children.push(child);
+    },
+    resize() {},
+    setReactionsAsync() { return Promise.resolve(); }
+  });
+  const figma = {
+    root: { children: [] },
+    createPage() { const page = node(); this.root.children.push(page); return page; },
+    createFrame: node,
+    createText: node,
+    createNodeFromSvg: node,
+    setCurrentPageAsync: () => Promise.resolve(),
+    loadFontAsync: () => Promise.resolve(),
+    showUI() {},
+    notify() {},
+    closePlugin() {},
+    ui: { postMessage() {}, onmessage: null }
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8'), {
+    figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, Number, JSON, Error, String
+  });
+  figma.ui.onmessage({ type: 'import', spec: { title: 'T' }, pageName: 'P', scene: stackingScene() });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const paintOrder = [];
+  const walk = parent => { for (const child of parent.children) { paintOrder.push(child.name); walk(child); } };
+  walk(figma.root.children[0].children[0]);
+  const at = name => paintOrder.indexOf(name);
+
+  assert.ok(at('fc-drop') > at('Cell'), 'the dropdown must paint after the table cell it overlaps');
+  assert.ok(at('fc-drop') < at('portal'), 'z-index 50 stays below the z-index 60 dialog portal');
+  assert.ok(at('sheet') > at('backdrop'), 'the dialog must not sit under its own dimming backdrop');
+  assert.ok(at('sheet menu') > at('sheet'), 'a menu inside the dialog paints above the dialog');
+});
+
 test('clips only frames whose HTML overflow clips content', () => {
   for (const file of renderers) {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /clipsContent/);

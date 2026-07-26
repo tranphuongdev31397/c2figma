@@ -13,6 +13,25 @@ const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const STATE_GAP = 160;
 
+// A dropdown or dialog escapes its container in CSS through z-index. Figma has no z-index, so leaving
+// it nested buries it under whatever that container paints next — the table rows, in this app.
+// `zPath` is the z-index of every stacking ancestor, so a menu inside a dialog still sorts above it.
+const stackLevel = item => {
+  const level = Number.parseInt(item.zIndex, 10);
+  return (item.position === 'absolute' || item.position === 'fixed') && Number.isFinite(level) ? level : null;
+};
+const compareStack = (a, b) => {
+  for (let index = 0; index < Math.max(a.zPath.length, b.zPath.length); index += 1) {
+    const left = a.zPath[index];
+    const right = b.zPath[index];
+    if (left === right) continue;
+    if (left === undefined) return -1;
+    if (right === undefined) return 1;
+    return left - right;
+  }
+  return a.index - b.index;
+};
+
 // ponytail: `target` lets streamed states share one page. Figma navigates between frames on the same
 // page, so a page per state only scattered the prototype across the file.
 async function renderScene(scene, title, pageName, target) {
@@ -35,12 +54,18 @@ async function renderScene(scene, title, pageName, target) {
   const bounds = new Map([['__root__', { x: 0, y: 0 }]]);
   const actionNodes = new Map();
   const positioned = [];
+  const overlays = [];
+  const zPaths = new Map([['__root__', []]]);
 
   await figma.setCurrentPageAsync(page);
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
-    const parent = byId.get(item.parentId) || root;
-    const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
+    const level = stackLevel(item);
+    const inherited = zPaths.get(item.parentId) || [];
+    const zPath = level === null ? inherited : inherited.concat(level);
+    zPaths.set(item.id, zPath);
+    const parent = level === null ? byId.get(item.parentId) || root : root;
+    const parentBounds = level === null ? bounds.get(item.parentId) || bounds.get('__root__') : bounds.get('__root__');
     const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
     node.name = item.name || item.kind;
     node.x = Math.round(item.x - parentBounds.x);
@@ -75,7 +100,8 @@ async function renderScene(scene, title, pageName, target) {
     }
 
     parent.appendChild(node);
-    if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({ parent, node });
+    if (level !== null) overlays.push({ zPath, index, node });
+    else if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({ parent, node });
     if (item.actionKey) actionNodes.set(item.actionKey, node);
     byId.set(item.id, node);
     bounds.set(item.id, { x: item.x, y: item.y });
@@ -85,6 +111,8 @@ async function renderScene(scene, title, pageName, target) {
     }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
+  overlays.sort(compareStack);
+  for (const item of overlays) root.appendChild(item.node);
   if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
   return { page, root, actionNodes, pageName: page.name };
 }
