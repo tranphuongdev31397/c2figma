@@ -33,7 +33,7 @@ async function renderScene(scene, title) {
       node.fontName = {family:'Inter', style};
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
-      node.fills = item.color ? [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color.a ?? 1)] : [];
+      node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
       node.textAutoResize = 'NONE';
     } else {
       node.layoutMode = 'NONE';

@@ -48,11 +48,27 @@
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
       const parseColor = value => {
         if (!value || value === 'transparent') return null;
+        const clamp = channel => Math.max(0, Math.min(1, channel));
+        const alpha = value => value === undefined ? 1 : clamp(Number(value.replace('%', '')) / (value.includes('%') ? 100 : 1));
+        const rgb = (r, g, b, a = 1) => ({r:clamp(Number(r) / 255), g:clamp(Number(g) / 255), b:clamp(Number(b) / 255), a});
+        const hex = value.match(/^#([0-9a-f]{3,8})$/i);
+        if (hex) {
+          const raw = hex[1].length <= 4 ? hex[1].split('').map(part => part + part).join('') : hex[1];
+          return rgb(parseInt(raw.slice(0,2),16), parseInt(raw.slice(2,4),16), parseInt(raw.slice(4,6),16), raw.length === 8 ? parseInt(raw.slice(6,8),16) / 255 : 1);
+        }
+        const oklch = value.match(/^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)(%)?\s+([\d.+-]+)(deg|rad|grad|turn)?(?:\s*\/\s*([\d.]+%?))?\s*\)$/i);
+        if (oklch) {
+          const L = Number(oklch[1]) / (oklch[2] ? 100 : 1), C = Number(oklch[3]) / (oklch[4] ? 100 : 1);
+          const unit = oklch[6] || 'deg', angle = Number(oklch[5]) * (unit === 'rad' ? 1 : unit === 'grad' ? Math.PI / 200 : unit === 'turn' ? Math.PI * 2 : Math.PI / 180);
+          const a = C * Math.cos(angle), b = C * Math.sin(angle), l = (L + 0.3963377774*a + 0.2158037573*b) ** 3, m = (L - 0.1055613458*a - 0.0638541728*b) ** 3, s = (L - 0.0894841775*a - 1.291485548*b) ** 3;
+          const convert = channel => channel <= 0.0031308 ? 12.92 * channel : 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+          return {r:clamp(convert(4.0767416621*l - 3.3077115913*m + 0.2309699292*s)), g:clamp(convert(-1.2684380046*l + 2.6097574011*m - 0.3413193965*s)), b:clamp(convert(-0.0041960863*l - 0.7034186147*m + 1.707614701*s)), a:alpha(oklch[7])};
+        }
         const match = value.match(/rgba?\(([^)]+)\)/i);
         if (!match) return null;
-        const parts = match[1].split(',').map(part => part.trim());
+        const parts = match[1].replace('/', ',').split(',').map(part => part.trim());
         const channel = part => Number(part.replace('%', '')) * (part.includes('%') ? 2.55 : 1);
-        return { r: channel(parts[0]) / 255, g: channel(parts[1]) / 255, b: channel(parts[2]) / 255, a: parts[3] === undefined ? 1 : Number(parts[3]) };
+        return rgb(channel(parts[0]), channel(parts[1]), channel(parts[2]), alpha(parts[3]));
       };
       const number = value => Number.parseFloat(value) || 0;
       const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= width && rect.top <= height;
