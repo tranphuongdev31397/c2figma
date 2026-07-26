@@ -157,15 +157,17 @@ async function renderGraph(graph, title, pageName) {
 }
 
 let session;
+let renderQueue = Promise.resolve();
 
 function startSession(message) {
   session = sessionFor(message);
+  session.queue = renderQueue;
 }
 
-function enqueue(work) {
-  const current = session;
+function enqueue(current, work) {
   if (!current) return;
-  current.queue = current.queue.then(() => current.failed ? undefined : work());
+  renderQueue = renderQueue.then(() => current.failed || current !== session ? undefined : work());
+  current.queue = renderQueue;
   return current.queue;
 }
 
@@ -199,7 +201,7 @@ figma.ui.onmessage = message => {
     const baseline = current && current.states.size === 0 && !message.state?.actionPath?.length;
     if (!current || current.states.has(message.state?.id)) return;
     current.states.set(message.state.id, message.state);
-    enqueue(async () => {
+    enqueue(current, async () => {
       try {
         const rendered = await renderOneState(message.state, current);
         if (rendered) figma.ui.postMessage({ type: 'state-progress', current: current.rendered.size, total: current.states.size, title: current.title });
@@ -212,7 +214,7 @@ figma.ui.onmessage = message => {
   }
   if (message.type === 'import-finish') {
     const current = session;
-    enqueue(async () => {
+    enqueue(current, async () => {
       try {
         await applyTransitions(message.graph, current.rendered);
         finishSession(current);
