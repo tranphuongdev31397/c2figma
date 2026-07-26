@@ -99,6 +99,17 @@
       const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= width && rect.top <= height;
       const technical = element => element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]');
       const payload = value => /(?:data:)?(?:text\/html|application\/json);base64,/i.test(value) || /^[A-Za-z0-9+/]{240,}={0,2}$/.test(value);
+      const nameIndex = new Map();
+      const semanticTags = { html: 'Document', body: 'Page', button: 'Button', input: 'Input', textarea: 'Textarea', table: 'Table', thead: 'Table header', tbody: 'Table body', tr: 'Row', th: 'Header cell', td: 'Cell', svg: 'Icon', img: 'Image', form: 'Form', ul: 'List', ol: 'List', li: 'List item' };
+      const nameForElement = element => {
+        const tag = element.tagName.toLowerCase();
+        const className = (element.getAttribute('class') || '').split(/\s+/).find(Boolean);
+        const label = element.getAttribute('aria-label') || element.getAttribute('data-testid') || element.getAttribute('data-name') || element.id || className;
+        const base = label || semanticTags[tag] || 'Frame';
+        const index = (nameIndex.get(base) || 0) + 1;
+        nameIndex.set(base, index);
+        return base + ' · ' + String(index).padStart(2, '0');
+      };
       const nodes = [];
       const ids = new Map();
       const elements = [...document.querySelectorAll('*')].filter(element => !ignored.has(element.tagName));
@@ -125,7 +136,7 @@
           id,
           parentId: parent ? ids.get(parent) : null,
           kind: isSvg ? 'svg' : 'box',
-          name: element.getAttribute('aria-label') || element.getAttribute('data-testid') || element.tagName.toLowerCase() + ' / ' + id,
+          name: nameForElement(element),
           x: rect.left,
           y: rect.top,
           width: rect.width,
@@ -136,6 +147,7 @@
           borders: border,
           radius,
           position: style.position,
+          overflow: style.overflow,
           opacity: Number(style.opacity) || 1,
           text: '',
           fontSize: number(style.fontSize),

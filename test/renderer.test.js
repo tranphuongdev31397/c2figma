@@ -26,6 +26,13 @@ test('raises positioned layers above normal siblings', () => {
   }
 });
 
+test('clips only frames whose HTML overflow clips content', () => {
+  for (const file of renderers) {
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /clipsContent/);
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /item\.overflow/);
+  }
+});
+
 test('renders border weights independently per side', () => {
   for (const file of renderers) {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /strokeBottomWeight/);

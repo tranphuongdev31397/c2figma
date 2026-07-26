@@ -35,6 +35,7 @@ async function renderScene(scene, title) {
       node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
+      node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
       node.fills = item.fill ? [solid(item.fill)] : [];
       const borders = item.borders;
       const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
