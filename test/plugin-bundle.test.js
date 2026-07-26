@@ -14,6 +14,13 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /parent\.postMessage\(\{ pluginMessage:/);
   assert.match(bundle.ui, /button, \.button\s*\{/);
   assert.match(bundle.ui, /captureSceneGraph/);
+  assert.match(bundle.ui, /captureStateGraph/);
+  assert.match(bundle.ui, /onState/);
+  assert.match(bundle.ui, /import-start/);
+  assert.match(bundle.ui, /import-state/);
+  assert.match(bundle.ui, /import-finish/);
+  assert.match(bundle.ui, /Đang khám phá/);
+  assert.match(bundle.ui, /states\.json/);
   assert.match(bundle.ui, /function pluginCode/);
   assert.match(bundle.ui, /pluginCode\(selected\.scene, selected\.pageName/);
   assert.match(bundle.ui, /id="page-name"/);

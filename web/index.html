@@ -38,6 +38,7 @@
     .page-name label { color: #737373; font-size: 12px; font-weight: 600; }
     .page-name input { width: 100%; height: 38px; border: 1px solid #dcdcdc; border-radius: 8px; padding: 0 11px; color: #171717; font: 500 13px inherit; }
     .page-name input:focus { outline: 2px solid #c8e6cc; border-color: #16993b; }
+    .interactive { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: #444; font-size: 12px; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
     .chip { border: 1px solid #dbe8d7; background: #ebf3e0; color: #16993b; border-radius: 999px; padding: 5px 9px; font-size: 12px; }
     .note { color: #737373; font-size: 12px; line-height: 1.5; margin: 18px 0 0; }
@@ -58,6 +59,7 @@
         <div><strong>Kéo thả file HTML vào đây</strong><span>hoặc bấm để chọn file từ máy</span></div>
       </label>
       <input id="file" type="file" accept=".html,.htm,text/html">
+      <label class="interactive"><input id="interactive" type="checkbox"> Khám phá các state tương tác (tối đa 8)</label>
       <div id="summary">
         <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
         <div class="page-name" id="page-name-field" hidden><label for="page-name">Tên page Figma</label><input id="page-name" type="text" maxlength="120" autocomplete="off"></div>
@@ -106,19 +108,57 @@
     }
     const fileBaseName = name => String(name || '').replace(/\.[^.]+$/, '').trim() || 'Imported HTML';
     function download() {
-      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(selected.scene, selected.pageName, spec.title)},{name:'scene.json',content:JSON.stringify(selected.scene,null,2)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+selected.pageName+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
+      const spec=selected.spec, graph=selected.graph;
+      const files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(selected.scene, selected.pageName, spec.title)+(graph ? '\\nconst STATE_GRAPH = '+JSON.stringify(graph).replace(/</g,'\\\\u003c')+';\\n' : '')}];
+      if (selected.scene) files.push({name:'scene.json',content:JSON.stringify(selected.scene,null,2)});
+      if (graph) files.push({name:'states.json',content:JSON.stringify(graph.states,null,2)});
+      files.push({name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+selected.pageName+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'});
       const blob=new Blob([zip(files)],{type:'application/zip'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(selected.pageName||'html-design').replace(/[^\\p{L}\\p{N}]+/gu,'-').replace(/^-|-$/g,'').toLowerCase()+'-figma-plugin.zip';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Đã tạo plugin ZIP. Mở file zip và import manifest.json vào Figma.';
     }
+    const postToFigma = message => parent.postMessage({ pluginMessage: message }, '*');
     function importDirect() {
-      if (!selected || !selected.scene) return;
-      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec, pageName: selected.pageName, scene: selected.scene } }, '*');
+      if (!selected || (!selected.scene && !selected.graph)) return;
+      if (selected.graph) {
+        if (selected.directStarted) return;
+        selected.directStarted=true;
+        postToFigma({type:'import-start',spec:selected.spec,pageName:selected.pageName,totalHint:0});
+        for (const state of selected.graph.states) postToFigma({type:'import-state',state});
+        if (selected.captureDone) postToFigma({type:'import-finish',graph:selected.graph});
+      } else postToFigma({type:'import',spec:selected.spec,pageName:selected.pageName,scene:selected.scene});
       $('download').disabled = true;
-      $('status').textContent = 'Đang tạo design editable trong Figma…';
+      $('status').textContent = selected.graph && !selected.captureDone ? 'Đang khám phá state và gửi sang Figma…' : 'Đang tạo design editable trong Figma…';
     }
     async function show(file, html) {
-      const spec=extract(html), pageName=fileBaseName(file.name); selected={spec:{...spec,pageName},file,pageName,scene:null}; $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName; $('title').textContent=spec.title; $('stats').textContent='Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=true; $('status').textContent='Đang đọc và dựng layout '+file.name+'…';
-      try { selected.scene=await captureSceneGraph(html); $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; $('download').disabled=false; $('status').textContent='Đã dựng layout thật từ '+file.name; }
-      catch (error) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+error.message; }
+      const spec=extract(html), pageName=fileBaseName(file.name), interactive=$('interactive').checked;
+      selected={spec:{...spec,pageName},file,pageName,scene:null,graph:interactive?{version:2,viewport:{width:1440,height:900},states:[],transitions:[]}:null,captureDone:false,directStarted:false}; $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName; $('title').textContent=spec.title; $('stats').textContent='Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=!interactive || !inFigma; $('status').textContent='Đang đọc và dựng layout '+file.name+'…';
+      if (!interactive) {
+        try { selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; $('download').disabled=false; $('status').textContent='Đã dựng layout thật từ '+file.name; }
+        catch (error) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+error.message; }
+        return;
+      }
+      const onState = (state, graph) => {
+        if (selected.file !== file) return;
+        selected.graph=graph;
+        selected.scene ||= state.scene;
+        const layers=graph.states.reduce((total,item)=>total+item.scene.nodes.length,0);
+        $('stats').textContent=graph.states.length+' state · '+layers+' layers';
+        $('status').textContent='Đang khám phá '+graph.states.length+'/8 state'+(selected.directStarted?' và gửi sang Figma…':'…');
+        if (selected.directStarted) postToFigma({type:'import-state',state});
+      };
+      try {
+        const graph=await captureStateGraph(html,{},onState);
+        if (selected.file !== file) return;
+        selected.graph=graph; selected.scene ||= graph.states[0]?.scene; selected.captureDone=true;
+        $('download').disabled=false;
+        $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+file.name;
+        if (selected.directStarted) postToFigma({type:'import-finish',graph});
+      } catch (error) {
+        if (selected.file !== file) return;
+        $('status').textContent='Không khám phá được state; dùng layout cơ bản.';
+        if (selected.directStarted) postToFigma({type:'import-error',message:error.message});
+        try { selected.graph=null; selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('download').disabled=false; }
+        catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; }
+      }
     }
     $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)await show(file,await file.text());});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
@@ -132,8 +172,12 @@
         if (!message) return;
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
+          : message.type === 'state-progress'
+            ? `Đang tạo page state ${message.current}/${message.total}`
           : message.type === 'imported'
             ? `Đã tạo page “${message.pageName || message.title}” trong Figma.`
+            : message.type === 'import-error'
+              ? `Một state không tạo được: ${message.message}`
             : `Lỗi: ${message.message}`;
       };
     }
