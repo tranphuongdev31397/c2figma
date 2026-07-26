@@ -12,4 +12,5 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.doesNotMatch(bundle.code, /figma\.currentPage\s*=\s*page/);
   assert.match(bundle.code, /type !== 'import'/);
   assert.match(bundle.ui, /parent\.postMessage\(\{ pluginMessage:/);
+  assert.match(bundle.ui, /button, \.button\s*\{/);
 });
