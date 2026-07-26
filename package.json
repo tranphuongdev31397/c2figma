@@ -1,0 +1,12 @@
+{
+  "name": "employee-figma-importer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test",
+    "import": "node src/cli.js",
+    "plugin": "node src/plugin-cli.js",
+    "plugin:package": "node src/plugin-cli.js && node src/plugin-package.js"
+  }
+}

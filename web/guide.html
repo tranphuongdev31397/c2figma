@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hướng dẫn — HTML → Figma</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #171717; background: #f7f8f6; line-height: 1.6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px 56px; }
+    main { width: min(760px, 100%); margin: 0 auto; }
+    a { color: #16993b; }
+    .top { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 28px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: white; background: #16993b; font-weight: 800; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.02em; }
+    h2 { margin: 28px 0 8px; font-size: 18px; }
+    p { margin: 8px 0; }
+    .card { background: white; border: 1px solid #e5e5e5; border-radius: 14px; padding: 24px; box-shadow: 0 8px 24px #0000000b; }
+    .lead { color: #525252; margin-top: 5px; }
+    .step { border-top: 1px solid #eeeeee; padding: 14px 0 0; margin-top: 14px; }
+    .step:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+    .step strong { display: block; margin-bottom: 3px; }
+    code { font-size: .92em; background: #f3f5f2; border-radius: 5px; padding: 2px 5px; }
+    .notice { background: #ebf3e0; border: 1px solid #dbe8d7; border-radius: 10px; padding: 12px 14px; margin-top: 18px; }
+    .back { white-space: nowrap; font-size: 13px; }
+    ul { margin: 8px 0 0; padding-left: 22px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="top">
+      <div class="brand"><div class="mark">S</div><div><h1>Hướng dẫn sử dụng</h1><div class="lead">HTML → Figma Visual Importer</div></div></div>
+      <a class="back" href="/">← Về tool</a>
+    </div>
+    <section class="card">
+      <p>Tool đọc file HTML standalone và tạo một bộ khung visual editable trong Figma. Nội dung HTML được phân tích ngay trên máy của bạn; bản web không upload file lên server.</p>
+
+      <h2>Cách dùng nhanh trên website</h2>
+      <div class="step"><strong>1. Chuẩn bị file</strong><p>Dùng file <code>.html</code> hoặc <code>.htm</code> standalone có thể mở được trong trình duyệt.</p></div>
+      <div class="step"><strong>2. Chọn file</strong><p>Kéo-thả file vào vùng nhập hoặc bấm vùng đó để chọn file từ máy.</p></div>
+      <div class="step"><strong>3. Tải plugin theo HTML</strong><p>Nếu chưa cài plugin Figma, bấm <strong>Tải plugin theo HTML (.zip)</strong>, giải nén và import <code>manifest.json</code> trong Figma Desktop. Đây là cách fallback; mỗi HTML sẽ tạo một ZIP riêng.</p></div>
+
+      <h2>Cách dùng khuyến nghị: cài plugin một lần</h2>
+      <div class="step"><strong>1. Tải plugin</strong><p>Quay lại <a href="/">trang chính</a> và bấm <strong>Cài plugin Figma</strong>.</p></div>
+      <div class="step"><strong>2. Import vào Figma Desktop</strong><p>Giải nén file tải về, mở Figma Desktop, vào <strong>Plugins → Development → Import plugin from manifest…</strong>, rồi chọn <code>manifest.json</code>.</p></div>
+      <div class="step"><strong>3. Render HTML trực tiếp</strong><p>Mở plugin trong Figma, chọn HTML và bấm <strong>Tạo design trong Figma</strong>. Các layer editable sẽ được tạo trực tiếp trong file hiện tại.</p></div>
+      <div class="notice"><strong>Lưu ý:</strong> chỉ cần cài plugin một lần. Những lần sau không cần tải ZIP cho từng HTML.</div>
+
+      <h2>Tool tạo được gì?</h2>
+      <ul><li>Frame màn hình 1440×900.</li><li>Sidebar, header và vùng nội dung editable.</li><li>Text từ title, heading và label.</li><li>Một số CSS custom properties, button và badge/status.</li></ul>
+
+      <h2>Giới hạn hiện tại</h2>
+      <ul><li>Không chuyển toàn bộ DOM/CSS thành bản pixel-perfect.</li><li>Không mang logic React, API hoặc dữ liệu động vào Figma.</li><li>Layout đặc biệt có thể cần bổ sung mapping trong source importer.</li></ul>
+
+      <h2>Khi có lỗi</h2>
+      <ul><li>Kiểm tra file có đuôi <code>.html</code> hoặc <code>.htm</code>.</li><li>Dùng Figma Desktop, không dùng Figma trên trình duyệt để import plugin development.</li><li>Nếu plugin cũ không cập nhật, import lại manifest sau khi tải bản ZIP mới.</li></ul>
+    </section>
+  </main>
+</body>
+</html>

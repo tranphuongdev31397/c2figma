@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTML → Figma Visual Importer</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #171717; background: #f7f8f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { width: min(720px, 100%); }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+    .mark { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: white; background: #16993b; font-weight: 800; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.02em; }
+    .sub { margin: 5px 0 0; color: #737373; font-size: 13px; }
+    .card { background: white; border: 1px solid #e5e5e5; border-radius: 14px; padding: 22px; box-shadow: 0 8px 24px #0000000b; }
+    .drop { border: 1.5px dashed #b9c6b7; border-radius: 12px; min-height: 190px; display: grid; place-items: center; text-align: center; padding: 26px; background: #fbfdf9; cursor: pointer; }
+    .drop.drag { background: #ebf3e0; border-color: #16993b; }
+    .drop strong { display: block; margin-bottom: 8px; font-size: 15px; }
+    .drop span { color: #737373; font-size: 13px; }
+    input[type=file] { display: none; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    button { border: 1px solid #e5e5e5; background: white; color: #171717; border-radius: 8px; height: 38px; padding: 0 14px; font: 600 13px inherit; cursor: pointer; }
+    a.button { display: inline-flex; align-items: center; text-decoration: none; }
+    a.button.secondary { color: #16993b; }
+    button.primary { border-color: #16993b; background: #16993b; color: white; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    #summary { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e5e5e5; }
+    .summary-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .summary-head strong { font-size: 15px; }
+    .summary-head span { color: #737373; font-size: 12px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .chip { border: 1px solid #dbe8d7; background: #ebf3e0; color: #16993b; border-radius: 999px; padding: 5px 9px; font-size: 12px; }
+    .note { color: #737373; font-size: 12px; line-height: 1.5; margin: 18px 0 0; }
+    #status { min-height: 18px; margin-top: 12px; color: #16993b; font-size: 12px; }
+    code { font-size: 12px; background: #f5f5f5; border-radius: 5px; padding: 2px 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><div class="mark">S</div><div><h1>HTML → Figma</h1><p class="sub">Chọn file standalone để tạo plugin Figma visual editable</p></div></div>
+    <section class="card">
+      <label class="drop" id="drop" for="file">
+        <div><strong>Kéo thả file HTML vào đây</strong><span>hoặc bấm để chọn file từ máy</span></div>
+      </label>
+      <input id="file" type="file" accept=".html,.htm,text/html">
+      <div id="summary">
+        <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="actions"><a class="button secondary" href="/guide">Hướng dẫn</a><a class="button secondary" href="/downloads/html-figma-importer.zip" download>Cài plugin Figma</a><button id="download" class="primary" disabled>Tải plugin theo HTML (.zip)</button></div>
+      <div id="status"></div>
+      <p class="note" id="note">Cài plugin Figma một lần để các lần sau chọn HTML và render trực tiếp trong Figma Desktop.</p>
+    </section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    let selected = null;
+    const inFigma = window.parent !== window;
+    const clean = value => { const el = document.createElement('textarea'); el.innerHTML = value; return el.value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); };
+    const unique = values => [...new Set(values.filter(Boolean))];
+    function extract(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const source = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, '');
+      const tokens = {};
+      for (const m of html.matchAll(/--([\w-]+)\s*:\s*([^;{}\n]+)/g)) tokens[m[1]] = m[2].trim();
+      const headings = unique([...doc.querySelectorAll('h1,h2,h3')].map(n => clean(n.innerHTML)));
+      const labels = unique([
+        ...[...doc.querySelectorAll('button,label,summary')].map(n => clean(n.innerHTML)),
+        ...[...doc.querySelectorAll('[class*="badge"],[class*="status"],[class*="chip"]')].map(n => clean(n.innerHTML))
+      ]);
+      return { title: clean(doc.title || 'Untitled'), tokens, headings, labels };
+    }
+    const safe = value => value.replace(/</g, '\\u003c');
+    function pluginCode(spec) {
+      return `const SPEC = ${JSON.stringify(spec)};
+const C={white:{r:1,g:1,b:1},text:{r:.1,g:.1,b:.1},sub:{r:.32,g:.32,b:.32},muted:{r:.98,g:.98,b:.97},line:{r:.9,g:.9,b:.9},green:{r:.086,g:.6,b:.231},greenBg:{r:.922,g:.953,b:.878}};
+const solid=c=>({type:'SOLID',color:c}); const rect=(p,n,x,y,w,h,c=C.white,r=0)=>{const a=figma.createFrame();a.name=n;a.fills=[solid(c)];a.x=x;a.y=y;a.resize(w,h);a.layoutMode='NONE';if(r)a.cornerRadius=r;p.appendChild(a);return a;};
+async function t(p,v,x,y,w,s=14,st='Regular',c=C.text){const a=figma.createText();await figma.loadFontAsync({family:'Inter',style:st});a.fontName={family:'Inter',style:st};a.characters=v;a.fontSize=s;a.fills=[solid(c)];a.textAutoResize='HEIGHT';a.x=x;a.y=y;a.resize(w,Math.max(18,s*1.35));p.appendChild(a);}
+async function main(){const page=figma.createPage();page.name='HTML Visual • '+SPEC.title;const root=rect(page,'Screen / '+SPEC.title,0,0,1440,900,C.muted);const side=rect(root,'Sidebar',0,0,264,900,C.white);side.strokes=[solid(C.line)];side.strokeWeight=1;await t(side,SPEC.title,24,24,190,17,'Semi Bold');const mark=rect(side,'Brand mark',202,18,34,34,C.green,9);await t(mark,'S',0,8,34,16,'Bold',C.white);await t(side,'NAVIGATION',14,88,220,11,'Semi Bold',C.sub);const nav=(SPEC.headings.length?SPEC.headings:['Overview']).slice(0,6);for(let i=0;i<nav.length;i++){const row=rect(side,'Nav / '+nav[i],14,110+i*42,236,38,i===0?C.greenBg:C.white,8);await t(row,nav[i],40,10,178,13,i===0?'Semi Bold':'Regular',i===0?C.green:C.sub);}const main=rect(root,'Main content',264,0,1176,900,C.muted);const head=rect(main,'Page header',0,0,1176,96,C.white);head.strokes=[solid(C.line)];head.strokeWeight=1;await t(head,SPEC.title,24,24,500,21,'Semi Bold');const body=rect(main,'Content',24,116,1128,720,C.white,10);body.strokes=[solid(C.line)];body.strokeWeight=1;await t(body,SPEC.headings[1]||SPEC.title,20,20,580,16,'Semi Bold');await t(body,'Generated visual scaffold — refine mapping for this HTML when needed.',20,48,700,12,'Regular',C.sub);const labels=SPEC.labels.length?SPEC.labels:['Primary action','Secondary action','Active'];for(let i=0;i<Math.min(5,labels.length);i++){const row=rect(body,'Content / '+labels[i],20,94+i*58,1088,48,C.white,8);row.strokes=[solid(C.line)];row.strokeWeight=1;await t(row,labels[i],18,14,560,13,i===0?'Semi Bold':'Regular');}figma.currentPage=page;figma.closePlugin('Created editable visual scaffold.');}main();`;
+    }
+    const crcTable = (() => { const table=[]; for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;table[n]=c>>>0;}return table; })();
+    const crc32 = bytes => { let crc=0xffffffff; for(const b of bytes)crc=crcTable[(crc^b)&255]^(crc>>>8); return (crc^0xffffffff)>>>0; };
+    const u16 = (a,n) => { a.push(n&255,(n>>>8)&255); };
+    const u32 = (a,n) => { a.push(n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255); };
+    const concat = parts => { const out=new Uint8Array(parts.reduce((n,p)=>n+p.length,0)); let at=0; for(const p of parts){out.set(p,at);at+=p.length;}return out; };
+    function zip(files) {
+      const enc=new TextEncoder(), local=[], central=[]; let offset=0;
+      for(const file of files){const name=enc.encode(file.name),data=enc.encode(file.content),crc=crc32(data);const h=[];u32(h,0x04034b50);u16(h,20);u16(h,0);u16(h,0);u16(h,0);u16(h,0);u32(h,crc);u32(h,data.length);u32(h,data.length);u16(h,name.length);u16(h,0);local.push(Uint8Array.from(h),name,data);const c=[];u32(c,0x02014b50);u16(c,20);u16(c,20);u16(c,0);u16(c,0);u16(c,0);u16(c,0);u32(c,crc);u32(c,data.length);u32(c,data.length);u16(c,name.length);u16(c,0);u16(c,0);u16(c,0);u16(c,0);u32(c,0);u32(c,offset);central.push(Uint8Array.from(c),name);offset+=30+name.length+data.length;}
+      const cd=concat(central), end=[];u32(end,0x06054b50);u16(end,0);u16(end,0);u16(end,files.length);u16(end,files.length);u32(end,cd.length);u32(end,offset);u16(end,0);return concat([...local,cd,Uint8Array.from(end)]);
+    }
+    function download() {
+      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(spec)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+spec.title+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
+      const blob=new Blob([zip(files)],{type:'application/zip'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(spec.title||'html-design').replace(/[^\\p{L}\\p{N}]+/gu,'-').replace(/^-|-$/g,'').toLowerCase()+'-figma-plugin.zip';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Đã tạo plugin ZIP. Mở file zip và import manifest.json vào Figma.';
+    }
+    function importDirect() {
+      if (!selected) return;
+      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec } }, '*');
+      $('status').textContent = 'Đang tạo design editable trong Figma…';
+    }
+    function show(file, html) { const spec=extract(html); selected={spec,file}; $('summary').style.display='block'; $('title').textContent=spec.title; $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+Object.keys(spec.tokens).length+' tokens'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=false; $('status').textContent='Đã đọc '+file.name; }
+    $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)show(file,await file.text());});
+    $('download').addEventListener('click', inFigma ? importDirect : download);
+    if (inFigma) {
+      $('download').textContent = 'Tạo design trong Figma';
+      $('note').textContent = 'Chọn HTML, rồi bấm nút để tạo layer editable trực tiếp trong file Figma.';
+      window.onmessage = event => {
+        const message = event.data.pluginMessage;
+        if (!message) return;
+        $('status').textContent = message.type === 'imported'
+          ? `Đã tạo “${message.title}” trong Figma.`
+          : `Lỗi: ${message.message}`;
+      };
+    }
+    $('drop').addEventListener('dragover',e=>{e.preventDefault();$('drop').classList.add('drag');});
+    $('drop').addEventListener('dragleave',()=> $('drop').classList.remove('drag'));
+    $('drop').addEventListener('drop',async e=>{e.preventDefault();$('drop').classList.remove('drag');const file=e.dataTransfer.files[0];if(file&&/\\.html?$/i.test(file.name))show(file,await file.text());});
+  </script>
+</body>
+</html>
