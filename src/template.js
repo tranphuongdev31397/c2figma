@@ -13,9 +13,9 @@ async function main() {
   const page=figma.createPage(); page.name='HTML Visual • '+${title};
   const root=figma.createFrame(); root.name='Screen / '+${title}; root.resize(SCENE.viewport.width,SCENE.viewport.height); root.layoutMode='NONE'; root.fills=[{type:'SOLID',color:{r:1,g:1,b:1}}]; page.appendChild(root);
   const nodes=new Map([['__root__',root]]), bounds=new Map([['__root__',{x:0,y:0}]]);
-  for (const item of SCENE.nodes) { const parent=nodes.get(item.parentId)||root, pb=bounds.get(item.parentId)||bounds.get('__root__'), node=item.kind==='text'?figma.createText():figma.createFrame(); node.name=item.name||item.kind; node.x=item.x-pb.x; node.y=item.y-pb.y; node.resize(Math.max(1,item.width),Math.max(1,item.height)); node.opacity=item.opacity ?? 1;
+  for (const item of SCENE.nodes) { const parent=nodes.get(item.parentId)||root, pb=bounds.get(item.parentId)||bounds.get('__root__'), node=item.kind==='text'?figma.createText():item.kind==='svg'?figma.createNodeFromSvg(item.svg):figma.createFrame(); node.name=item.name||item.kind; node.x=item.x-pb.x; node.y=item.y-pb.y; node.resize(Math.max(1,item.width),Math.max(1,item.height)); node.opacity=item.opacity ?? 1;
     if(item.kind==='text'){const fs=style(item.fontWeight);await figma.loadFontAsync({family:'Inter',style:fs});node.fontName={family:'Inter',style:fs};node.characters=item.text||'';node.fontSize=item.fontSize||14;node.fills=[solid(item.color||{r:.1,g:.1,b:.1})];node.textAutoResize='WIDTH_AND_HEIGHT';}
-    else {node.layoutMode='NONE';node.fills=item.fill?[solid(item.fill)]:[];if(item.stroke&&item.strokeWidth){node.strokes=[solid(item.stroke)];node.strokeWeight=item.strokeWidth;}if(item.radius)node.cornerRadius=item.radius;}
+    else if(item.kind!=='svg'){node.layoutMode='NONE';node.fills=item.fill?[solid(item.fill)]:[];if(item.stroke&&item.strokeWidth){node.strokes=[solid(item.stroke)];node.strokeWeight=item.strokeWidth;}if(item.radius)node.cornerRadius=item.radius;}
     parent.appendChild(node);nodes.set(item.id,node);bounds.set(item.id,{x:item.x,y:item.y}); }
   await figma.setCurrentPageAsync(page); figma.closePlugin('Đã tạo design editable từ HTML.');
 }

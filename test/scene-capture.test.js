@@ -10,3 +10,9 @@ test('waits for the rendered DOM to settle before serializing a bundled page', (
   assert.match(source, /__bundler.*manifest/);
   assert.match(source, /borderBottomColor/);
 });
+
+test('captures native control text and SVG artwork as real scene layers', () => {
+  assert.match(source, /element\.placeholder/);
+  assert.match(source, /kind: element\.tagName === 'SVG' \? 'svg'/);
+  assert.match(source, /outerHTML/);
+});

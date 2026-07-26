@@ -13,3 +13,9 @@ test('keeps captured text on one line when Figma font metrics are wider', () => 
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /WIDTH_AND_HEIGHT/);
   }
 });
+
+test('renders captured SVG layers through Figma SVG import', () => {
+  for (const file of renderers) {
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /createNodeFromSvg/);
+  }
+});

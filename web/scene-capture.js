@@ -92,6 +92,10 @@
         return rgb(channel(parts[0]), channel(parts[1]), channel(parts[2]), alpha(parts[3]));
       };
       const number = value => Number.parseFloat(value) || 0;
+      const colorHex = value => {
+        const color = parseColor(value) || { r: 0, g: 0, b: 0 };
+        return '#' + [color.r, color.g, color.b].map(channel => Math.round(channel * 255).toString(16).padStart(2, '0')).join('');
+      };
       const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= width && rect.top <= height;
       const technical = element => element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]');
       const payload = value => /(?:data:)?(?:text\/html|application\/json);base64,/i.test(value) || /^[A-Za-z0-9+/]{240,}={0,2}$/.test(value);
@@ -100,6 +104,7 @@
       const elements = [...document.querySelectorAll('*')].filter(element => !ignored.has(element.tagName));
 
       for (const element of elements) {
+        if (element.tagName !== 'SVG' && element.closest('svg')) continue;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         if (!visible(element, style, rect) || technical(element) || nodes.length >= 2000) continue;
@@ -117,7 +122,7 @@
         nodes.push({
           id,
           parentId: parent ? ids.get(parent) : null,
-          kind: 'box',
+          kind: element.tagName === 'SVG' ? 'svg' : 'box',
           name: element.getAttribute('aria-label') || element.getAttribute('data-testid') || element.tagName.toLowerCase() + ' / ' + id,
           x: rect.left,
           y: rect.top,
@@ -131,7 +136,8 @@
           text: '',
           fontSize: number(style.fontSize),
           fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
-          color: parseColor(style.color)
+          color: parseColor(style.color),
+          svg: element.tagName === 'SVG' ? element.outerHTML.replace(/currentColor/gi, colorHex(style.color)) : null
         });
 
         for (const child of element.childNodes) {
@@ -162,6 +168,31 @@
               color: parseColor(style.color)
             });
           }
+        }
+
+        if ((element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') && (element.value || element.placeholder)) {
+          const text = element.value || element.placeholder;
+          const textStyle = element.value ? style : getComputedStyle(element, '::placeholder');
+          const lineHeight = number(style.lineHeight) || number(style.fontSize);
+          nodes.push({
+            id: 'n' + nodes.length,
+            parentId: id,
+            kind: 'text',
+            name: 'Text / ' + text.slice(0, 40),
+            x: rect.left + number(style.borderLeftWidth) + number(style.paddingLeft),
+            y: rect.top + (rect.height - lineHeight) / 2,
+            width: Math.max(1, rect.width - number(style.borderLeftWidth) - number(style.borderRightWidth) - number(style.paddingLeft) - number(style.paddingRight)),
+            height: lineHeight,
+            fill: null,
+            stroke: null,
+            strokeWidth: 0,
+            radius: 0,
+            opacity: Number(style.opacity) || 1,
+            text,
+            fontSize: number(style.fontSize),
+            fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
+            color: parseColor(textStyle.color || style.color)
+          });
         }
       }
 

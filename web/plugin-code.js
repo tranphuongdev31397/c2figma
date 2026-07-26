@@ -21,7 +21,7 @@ async function renderScene(scene, title) {
   for (const item of scene.nodes) {
     const parent = byId.get(item.parentId) || root;
     const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
-    const node = item.kind === 'text' ? figma.createText() : figma.createFrame();
+    const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
     node.name = item.name || item.kind;
     node.x = Math.round(item.x - parentBounds.x);
     node.y = Math.round(item.y - parentBounds.y);
@@ -35,7 +35,7 @@ async function renderScene(scene, title) {
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
       node.textAutoResize = 'WIDTH_AND_HEIGHT';
-    } else {
+    } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       paint(node, item.fill, 1);
       if (item.stroke && item.strokeWidth) {
