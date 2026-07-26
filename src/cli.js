@@ -20,5 +20,5 @@ fs.mkdirSync(output, { recursive: true });
 fs.writeFileSync(path.join(output, 'spec.json'), JSON.stringify(spec, null, 2));
 fs.writeFileSync(path.join(output, 'manifest.json'), manifest());
 fs.writeFileSync(path.join(output, 'code.js'), pluginCode(spec));
-fs.writeFileSync(path.join(output, 'README.md'), `# ${spec.title}\n\nGenerated from the supplied HTML. Import \`manifest.json\` in Figma Desktop via Plugins → Development → Import plugin from manifest.\n`);
+fs.writeFileSync(path.join(output, 'README.md'), `# ${spec.title}\n\nGenerated metadata from the supplied HTML. For visual capture after the HTML has rendered, use the web Direct Import plugin.\n`);
 console.log(`Created ${output}`);

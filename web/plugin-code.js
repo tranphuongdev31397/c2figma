@@ -1,6 +1,11 @@
-const solid = (value, opacity = 1) => ({ type: 'SOLID', color: { r: value.r, g: value.g, b: value.b }, opacity: (value.a ?? 1) * opacity });
+(function (global) {
+  global.pluginCode = function pluginCode(scene) {
+    const data = JSON.stringify(scene || null).replace(/</g, '\\u003c');
+    return `const INITIAL_SCENE = ${data};
+const solid = (color, opacity=1) => ({type:'SOLID', color, opacity});
+const color = (value, fallback) => value ? {r:value.r,g:value.g,b:value.b} : fallback;
+const paint = (node, value, opacity) => { node.fills = value ? [solid(color(value,{r:1,g:1,b:1}), (value.a ?? 1) * opacity)] : []; };
 const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold' : 'Regular';
-
 async function renderScene(scene, title) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   const page = figma.createPage();
@@ -9,11 +14,10 @@ async function renderScene(scene, title) {
   root.name = 'Screen / ' + title;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
   root.layoutMode = 'NONE';
-  root.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  root.fills = [];
   page.appendChild(root);
   const byId = new Map([['__root__', root]]);
-  const bounds = new Map([['__root__', { x: 0, y: 0 }]]);
-
+  const bounds = new Map([['__root__', {x:0,y:0}]]);
   for (const item of scene.nodes) {
     const parent = byId.get(item.parentId) || root;
     const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
@@ -23,43 +27,41 @@ async function renderScene(scene, title) {
     node.y = Math.round(item.y - parentBounds.y);
     node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height)));
     node.opacity = Math.max(0, Math.min(1, item.opacity ?? 1));
-
     if (item.kind === 'text') {
       const style = fontStyle(item.fontWeight);
-      await figma.loadFontAsync({ family: 'Inter', style });
-      node.fontName = { family: 'Inter', style };
+      await figma.loadFontAsync({family:'Inter', style});
+      node.fontName = {family:'Inter', style};
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
-      node.fills = item.color ? [solid(item.color)] : [];
+      node.fills = item.color ? [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color.a ?? 1)] : [];
       node.textAutoResize = 'NONE';
     } else {
       node.layoutMode = 'NONE';
-      node.fills = item.fill ? [solid(item.fill)] : [];
+      paint(node, item.fill, 1);
       if (item.stroke && item.strokeWidth) {
-        node.strokes = [solid(item.stroke)];
+        node.strokes = [solid(color(item.stroke,{r:0.8,g:0.8,b:0.8}), item.stroke.a ?? 1)];
         node.strokeWeight = Math.max(1, item.strokeWidth);
       }
       if (item.radius) node.cornerRadius = item.radius;
     }
-
     parent.appendChild(node);
     byId.set(item.id, node);
-    bounds.set(item.id, { x: item.x, y: item.y });
+    bounds.set(item.id, {x:item.x, y:item.y});
   }
   await figma.setCurrentPageAsync(page);
   figma.closePlugin('Đã tạo design editable từ HTML.');
 }
-
-figma.showUI(__html__, { width: 720, height: 620 });
+figma.showUI(__html__, {width:720,height:620});
 figma.ui.onmessage = async message => {
   if (message.type !== 'import') return;
   try {
-    const title = message.spec?.title || 'Imported HTML';
-    await renderScene(message.scene, title);
+    await renderScene(message.scene || INITIAL_SCENE, message.spec?.title || 'Imported HTML');
     figma.notify('Đã tạo design editable trong Figma.');
-    figma.ui.postMessage({ type: 'imported', title });
+    figma.ui.postMessage({type:'imported', title:message.spec?.title || 'Imported HTML'});
   } catch (error) {
-    figma.notify('Không thể tạo design: ' + error.message, { error: true });
-    figma.ui.postMessage({ type: 'error', message: error.message });
+    figma.notify('Không thể tạo design: ' + error.message, {error:true});
+    figma.ui.postMessage({type:'error', message:error.message});
   }
-};
+};`;
+  };
+})(window);

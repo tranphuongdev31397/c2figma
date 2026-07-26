@@ -34,24 +34,24 @@
       <a class="back" href="/">← Về tool</a>
     </div>
     <section class="card">
-      <p>Tool đọc file HTML standalone và tạo một bộ khung visual editable trong Figma. Nội dung HTML được phân tích ngay trên máy của bạn; bản web không upload file lên server.</p>
+      <p>Tool chạy file HTML standalone trong một vùng preview ngay trên máy, đọc layout và tạo các layer visual editable trong Figma. File HTML không được upload lên server.</p>
 
       <h2>Cách dùng nhanh trên website</h2>
       <div class="step"><strong>1. Chuẩn bị file</strong><p>Dùng file <code>.html</code> hoặc <code>.htm</code> standalone có thể mở được trong trình duyệt.</p></div>
       <div class="step"><strong>2. Chọn file</strong><p>Kéo-thả file vào vùng nhập hoặc bấm vùng đó để chọn file từ máy.</p></div>
-      <div class="step"><strong>3. Tải plugin theo HTML</strong><p>Nếu chưa cài plugin Figma, bấm <strong>Tải plugin theo HTML (.zip)</strong>, giải nén và import <code>manifest.json</code> trong Figma Desktop. Đây là cách fallback; mỗi HTML sẽ tạo một ZIP riêng.</p></div>
+      <div class="step"><strong>3. Tải plugin theo HTML</strong><p>Nếu chưa cài plugin Figma, bấm <strong>Tải theo HTML (.zip)</strong>, giải nén và import <code>manifest.json</code> trong Figma Desktop. ZIP này đã chứa scene của HTML đang chọn.</p></div>
 
       <h2>Cách dùng khuyến nghị: cài plugin một lần</h2>
       <div class="step"><strong>1. Tải plugin</strong><p>Quay lại <a href="/">trang chính</a> và bấm <strong>Cài plugin Figma</strong>.</p></div>
       <div class="step"><strong>2. Import vào Figma Desktop</strong><p>Giải nén file tải về, mở Figma Desktop, vào <strong>Plugins → Development → Import plugin from manifest…</strong>, rồi chọn <code>manifest.json</code>.</p></div>
-      <div class="step"><strong>3. Render HTML trực tiếp</strong><p>Mở plugin trong Figma, chọn HTML và bấm <strong>Tạo design trong Figma</strong>. Các layer editable sẽ được tạo trực tiếp trong file hiện tại.</p></div>
+      <div class="step"><strong>3. Render HTML trực tiếp</strong><p>Mở plugin trong Figma, chọn HTML và bấm <strong>Tạo design trong Figma</strong>. Plugin dựng lại box, màu nền, border, bo góc, text, font weight và vị trí tương đối theo DOM.</p></div>
       <div class="notice"><strong>Lưu ý:</strong> chỉ cần cài plugin một lần. Những lần sau không cần tải ZIP cho từng HTML.</div>
 
       <h2>Tool tạo được gì?</h2>
-      <ul><li>Frame màn hình 1440×900.</li><li>Sidebar, header và vùng nội dung editable.</li><li>Text từ title, heading và label.</li><li>Một số CSS custom properties, button và badge/status.</li></ul>
+      <ul><li>Scene graph theo layout đã render trong viewport 1440×900.</li><li>Frame lồng nhau theo cấu trúc DOM.</li><li>Background, border, border radius, opacity và vị trí/kích thước.</li><li>Text layer editable với nội dung, màu, cỡ chữ và font weight.</li></ul>
 
       <h2>Giới hạn hiện tại</h2>
-      <ul><li>Không chuyển toàn bộ DOM/CSS thành bản pixel-perfect.</li><li>Không mang logic React, API hoặc dữ liệu động vào Figma.</li><li>Layout đặc biệt có thể cần bổ sung mapping trong source importer.</li></ul>
+      <ul><li>Chưa phải bản pixel-perfect: pseudo-element, icon SVG, shadow, gradient và một số CSS đặc biệt chưa được chuyển đầy đủ.</li><li>Logic tương tác, API và dữ liệu động không trở thành layer Figma.</li><li>HTML quá nặng hoặc render chậm có thể vượt thời gian capture.</li></ul>
 
       <h2>Khi có lỗi</h2>
       <ul><li>Kiểm tra file có đuôi <code>.html</code> hoặc <code>.htm</code>.</li><li>Dùng Figma Desktop, không dùng Figma trên trình duyệt để import plugin development.</li><li>Nếu plugin cũ không cập nhật, import lại manifest sau khi tải bản ZIP mới.</li></ul>

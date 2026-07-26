@@ -69,6 +69,8 @@
       <p class="note" id="note">Cài plugin Figma một lần để các lần sau chọn HTML và render trực tiếp trong Figma Desktop.</p>
     </section>
   </main>
+  <script src="/scene-capture.js"></script>
+  <script src="/plugin-code.js"></script>
   <script>
     const $ = id => document.getElementById(id);
     let selected = null;
@@ -87,14 +89,6 @@
       ]);
       return { title: clean(doc.title || 'Untitled'), tokens, headings, labels };
     }
-    const safe = value => value.replace(/</g, '\\u003c');
-    function pluginCode(spec) {
-      return `const SPEC = ${JSON.stringify(spec)};
-const C={white:{r:1,g:1,b:1},text:{r:.1,g:.1,b:.1},sub:{r:.32,g:.32,b:.32},muted:{r:.98,g:.98,b:.97},line:{r:.9,g:.9,b:.9},green:{r:.086,g:.6,b:.231},greenBg:{r:.922,g:.953,b:.878}};
-const solid=c=>({type:'SOLID',color:c}); const rect=(p,n,x,y,w,h,c=C.white,r=0)=>{const a=figma.createFrame();a.name=n;a.fills=[solid(c)];a.x=x;a.y=y;a.resize(w,h);a.layoutMode='NONE';if(r)a.cornerRadius=r;p.appendChild(a);return a;};
-async function t(p,v,x,y,w,s=14,st='Regular',c=C.text){const a=figma.createText();await figma.loadFontAsync({family:'Inter',style:st});a.fontName={family:'Inter',style:st};a.characters=v;a.fontSize=s;a.fills=[solid(c)];a.textAutoResize='HEIGHT';a.x=x;a.y=y;a.resize(w,Math.max(18,s*1.35));p.appendChild(a);}
-async function main(){const page=figma.createPage();page.name='HTML Visual • '+SPEC.title;const root=rect(page,'Screen / '+SPEC.title,0,0,1440,900,C.muted);const side=rect(root,'Sidebar',0,0,264,900,C.white);side.strokes=[solid(C.line)];side.strokeWeight=1;await t(side,SPEC.title,24,24,190,17,'Semi Bold');const mark=rect(side,'Brand mark',202,18,34,34,C.green,9);await t(mark,'S',0,8,34,16,'Bold',C.white);await t(side,'NAVIGATION',14,88,220,11,'Semi Bold',C.sub);const nav=(SPEC.headings.length?SPEC.headings:['Overview']).slice(0,6);for(let i=0;i<nav.length;i++){const row=rect(side,'Nav / '+nav[i],14,110+i*42,236,38,i===0?C.greenBg:C.white,8);await t(row,nav[i],40,10,178,13,i===0?'Semi Bold':'Regular',i===0?C.green:C.sub);}const main=rect(root,'Main content',264,0,1176,900,C.muted);const head=rect(main,'Page header',0,0,1176,96,C.white);head.strokes=[solid(C.line)];head.strokeWeight=1;await t(head,SPEC.title,24,24,500,21,'Semi Bold');const body=rect(main,'Content',24,116,1128,720,C.white,10);body.strokes=[solid(C.line)];body.strokeWeight=1;await t(body,SPEC.headings[1]||SPEC.title,20,20,580,16,'Semi Bold');await t(body,'Generated visual scaffold — refine mapping for this HTML when needed.',20,48,700,12,'Regular',C.sub);const labels=SPEC.labels.length?SPEC.labels:['Primary action','Secondary action','Active'];for(let i=0;i<Math.min(5,labels.length);i++){const row=rect(body,'Content / '+labels[i],20,94+i*58,1088,48,C.white,8);row.strokes=[solid(C.line)];row.strokeWeight=1;await t(row,labels[i],18,14,560,13,i===0?'Semi Bold':'Regular');}await figma.setCurrentPageAsync(page);figma.closePlugin('Created editable visual scaffold.');}main();`;
-    }
     const crcTable = (() => { const table=[]; for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;table[n]=c>>>0;}return table; })();
     const crc32 = bytes => { let crc=0xffffffff; for(const b of bytes)crc=crcTable[(crc^b)&255]^(crc>>>8); return (crc^0xffffffff)>>>0; };
     const u16 = (a,n) => { a.push(n&255,(n>>>8)&255); };
@@ -106,16 +100,20 @@ async function main(){const page=figma.createPage();page.name='HTML Visual • '
       const cd=concat(central), end=[];u32(end,0x06054b50);u16(end,0);u16(end,0);u16(end,files.length);u16(end,files.length);u32(end,cd.length);u32(end,offset);u16(end,0);return concat([...local,cd,Uint8Array.from(end)]);
     }
     function download() {
-      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(spec)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+spec.title+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
+      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(selected.scene)},{name:'scene.json',content:JSON.stringify(selected.scene,null,2)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+spec.title+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
       const blob=new Blob([zip(files)],{type:'application/zip'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(spec.title||'html-design').replace(/[^\\p{L}\\p{N}]+/gu,'-').replace(/^-|-$/g,'').toLowerCase()+'-figma-plugin.zip';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Đã tạo plugin ZIP. Mở file zip và import manifest.json vào Figma.';
     }
     function importDirect() {
-      if (!selected) return;
-      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec } }, '*');
+      if (!selected || !selected.scene) return;
+      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec, scene: selected.scene } }, '*');
       $('status').textContent = 'Đang tạo design editable trong Figma…';
     }
-    function show(file, html) { const spec=extract(html); selected={spec,file}; $('summary').style.display='block'; $('title').textContent=spec.title; $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+Object.keys(spec.tokens).length+' tokens'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=false; $('status').textContent='Đã đọc '+file.name; }
-    $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)show(file,await file.text());});
+    async function show(file, html) {
+      const spec=extract(html); selected={spec,file,scene:null}; $('summary').style.display='block'; $('title').textContent=spec.title; $('stats').textContent='Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=true; $('status').textContent='Đang đọc và dựng layout '+file.name+'…';
+      try { selected.scene=await captureSceneGraph(html); $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; $('download').disabled=false; $('status').textContent='Đã dựng layout thật từ '+file.name; }
+      catch (error) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+error.message; }
+    }
+    $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)await show(file,await file.text());});
     $('download').addEventListener('click', inFigma ? importDirect : download);
     if (inFigma) {
       document.querySelector('[data-install]').hidden = true;
@@ -131,7 +129,7 @@ async function main(){const page=figma.createPage();page.name='HTML Visual • '
     }
     $('drop').addEventListener('dragover',e=>{e.preventDefault();$('drop').classList.add('drag');});
     $('drop').addEventListener('dragleave',()=> $('drop').classList.remove('drag'));
-    $('drop').addEventListener('drop',async e=>{e.preventDefault();$('drop').classList.remove('drag');const file=e.dataTransfer.files[0];if(file&&/\\.html?$/i.test(file.name))show(file,await file.text());});
+    $('drop').addEventListener('drop',async e=>{e.preventDefault();$('drop').classList.remove('drag');const file=e.dataTransfer.files[0];if(file&&/\\.html?$/i.test(file.name))await show(file,await file.text());});
   </script>
 </body>
 </html>

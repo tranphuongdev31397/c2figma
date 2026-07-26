@@ -1,6 +1,6 @@
 # HTML → Figma visual importer
 
-Reusable, dependency-free starter project for turning standalone HTML designs into editable Figma visual scaffolds.
+Reusable, dependency-free tool for turning standalone HTML designs into editable Figma visual layers.
 
 ## Direct import into Figma
 
@@ -21,11 +21,11 @@ npm test
 npm run import -- "/path/to/design.html" --out dist/design
 ```
 
-The generated `dist/design/manifest.json` remains available for a standalone per-design plugin.
+The direct importer is the recommended path because it captures the HTML after it has rendered. The CLI still writes the extracted metadata for inspection.
 
 ## No-command flow
 
-Double-click `web/index.html`, drag any standalone HTML into the page, then click **Tải plugin Figma (.zip)**. This browser-only fallback remains available; the direct Figma plugin is the shorter workflow.
+Open `web/index.html`, drag any standalone HTML into the page, then click **Tải theo HTML (.zip)**. The ZIP contains the captured scene and a standalone plugin.
 
 ## Deploy to Vercel
 
@@ -33,8 +33,8 @@ This project is a static site. In Vercel, import the GitHub repository with no b
 
 ## What is reusable
 
-- Extracts page title, CSS custom properties, headings, buttons, labels and status/badge text.
-- Generates a Figma plugin with a 1440×900 editable screen, sidebar, header and content rows.
+- Runs the supplied HTML in a sandboxed preview and captures a 1440×900 scene graph.
+- Generates editable Figma frames and text layers from the rendered DOM.
 - No dependency or build step.
 
-The current employee design remains the visual reference. Arbitrary future HTML files get a safe scaffold first; add a small mapping in `src/template.js` when a new page has unique layout patterns. This keeps the importer predictable instead of pretending every DOM can become good Figma layers automatically.
+The current employee and warehouse screens are used as parity fixtures. Complex CSS still needs explicit support when it cannot be represented by native Figma frame/text properties.
