@@ -251,7 +251,9 @@
       const seen = new Set();
       return [...document.querySelectorAll(selectors)].filter(element => {
         if (seen.has(element) || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
-        if (element.tagName === 'A' && /^(?:https?:|mailto:|tel:)/i.test(element.href)) return false;
+        const role = (element.getAttribute('role') || '').toLowerCase();
+        if (element.getAttribute('aria-hidden') === 'true' || role === 'presentation' || role === 'none') return false;
+        if (element.tagName === 'A' && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
         seen.add(element);
         return true;
       }).map((element, index) => {

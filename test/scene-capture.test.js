@@ -55,3 +55,14 @@ test('replays actions by stable key instead of candidate index', () => {
   assert.match(source, /find\(.*\.key.*actionPath/);
   assert.doesNotMatch(source, /candidates\[actionPath\[/);
 });
+
+test('filters decorative candidates from action discovery', () => {
+  assert.match(source, /aria-hidden.*true/);
+  assert.match(source, /role.*presentation.*none/);
+});
+
+test('filters external navigation schemes while allowing hash links', () => {
+  assert.match(source, /https\?\|ftp\|data\|javascript\|mailto\|tel/);
+  assert.match(source, /test\(element\.href\)/);
+  assert.doesNotMatch(source, /href.*#.*external/);
+});
