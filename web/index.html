@@ -23,8 +23,9 @@
     .primary-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
     button, .button { border: 1px solid #e5e5e5; background: white; color: #171717; border-radius: 8px; height: 38px; padding: 0 14px; font: 600 13px inherit; cursor: pointer; }
     a.button { display: inline-flex; align-items: center; text-decoration: none; }
-    a.button.install { border-color: #16993b; background: #16993b; color: white; }
-    a.button.fallback { color: #16993b; }
+    .install { border-color: #16993b; background: #16993b; color: white; }
+    .install:disabled { opacity: .55; }
+    .fallback { color: #16993b; }
     .guide-link { color: #737373; font-size: 12px; font-weight: 600; text-underline-offset: 3px; }
     .guide-link:hover { color: #16993b; }
     .guide-link span { margin-left: 4px; color: #16993b; }
@@ -59,7 +60,7 @@
         <div><strong>Kéo thả file HTML vào đây</strong><span>hoặc bấm để chọn file từ máy</span></div>
       </label>
       <input id="file" type="file" accept=".html,.htm,text/html">
-      <label class="interactive"><input id="interactive" type="checkbox"> Khám phá các state tương tác <span id="state-limit"></span></label>
+      <label class="interactive"><input id="interactive" type="checkbox" checked> Khám phá các state tương tác <span id="state-limit"></span></label>
       <div id="summary">
         <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
         <div class="page-name" id="page-name-field" hidden><label for="page-name">Tên page Figma</label><input id="page-name" type="text" maxlength="120" autocomplete="off"></div>
@@ -116,26 +117,46 @@
       const blob=new Blob([zip(files)],{type:'application/zip'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(selected.pageName||'html-design').replace(/[^\\p{L}\\p{N}]+/gu,'-').replace(/^-|-$/g,'').toLowerCase()+'-figma-plugin.zip';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Đã tạo plugin ZIP. Mở file zip và import manifest.json vào Figma.';
     }
     const postToFigma = message => parent.postMessage({ pluginMessage: message }, '*');
-    function importDirect() {
-      if (!selected || (!selected.scene && !selected.graph)) return;
-      if (selected.graph) {
-        if (selected.directStarted) return;
-        selected.directStarted=true;
-        postToFigma({type:'import-start',spec:selected.spec,pageName:selected.pageName,totalHint:0});
-        for (const state of selected.graph.states) postToFigma({type:'import-state',state});
-        if (selected.captureDone) postToFigma({type:'import-finish',graph:selected.graph});
-      } else postToFigma({type:'import',spec:selected.spec,pageName:selected.pageName,scene:selected.scene});
-      $('download').disabled = true;
-      $('status').textContent = selected.graph && !selected.captureDone ? 'Đang khám phá state và gửi sang Figma…' : 'Đang tạo design editable trong Figma…';
+    // show() only previews the file. Capture is expensive and irreversible in Figma, so it waits for
+    // the button — that is the user's chance to notice they picked the wrong file.
+    function show(file, html) {
+      const spec=extract(html), pageName=fileBaseName(file.name);
+      selected={spec:{...spec,pageName},file,html,pageName,scene:null,graph:null,captureDone:false,directStarted:false,started:false};
+      $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName;
+      $('title').textContent=spec.title;
+      $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels';
+      $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join('');
+      $('download').disabled=false;
+      $('status').textContent='Đã đọc '+file.name+'. Kiểm tra rồi bấm “'+$('download').textContent+'”.';
     }
-    async function show(file, html) {
-      const spec=extract(html), pageName=fileBaseName(file.name), interactive=$('interactive').checked;
-      selected={spec:{...spec,pageName},file,pageName,scene:null,graph:interactive?{version:2,viewport:{width:1440,height:900},states:[],transitions:[]}:null,captureDone:false,directStarted:false}; $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName; $('title').textContent=spec.title; $('stats').textContent='Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=!interactive || (!inFigma && !selected.captureDone); $('status').textContent='Đang đọc và dựng layout '+file.name+'…';
+    function deliver() {
+      if (inFigma) return;
+      download();
+    }
+    async function start() {
+      if (!selected || selected.started) return;
+      selected.started=true;
+      $('download').disabled=true;
+      const {file, html}=selected;
+      const interactive=$('interactive').checked;
+
       if (!interactive) {
-        try { selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; $('download').disabled=false; $('status').textContent='Đã dựng layout thật từ '+file.name; }
-        catch (error) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+error.message; }
+        $('status').textContent='Đang dựng layout '+file.name+'…';
+        try {
+          selected.scene=await captureSceneGraph(html);
+          selected.captureDone=true;
+          $('stats').textContent=selected.scene.nodes.length+' layers';
+          if (inFigma) { postToFigma({type:'import',spec:selected.spec,pageName:selected.pageName,scene:selected.scene}); $('status').textContent='Đang tạo design editable trong Figma…'; }
+          else { deliver(); }
+        } catch (error) {
+          $('stats').textContent='Không dựng được layout';
+          $('status').textContent='Lỗi: '+error.message;
+          $('download').disabled=false; selected.started=false;
+        }
         return;
       }
+
+      if (inFigma) { selected.directStarted=true; postToFigma({type:'import-start',spec:selected.spec,pageName:selected.pageName,totalHint:0}); }
       const onState = (state, graph) => {
         if (selected.file !== file) return;
         selected.graph=graph;
@@ -149,25 +170,31 @@
         const graph=await captureStateGraph(html,{},onState);
         if (selected.file !== file) return;
         selected.graph=graph; selected.scene ||= graph.states[0]?.scene; selected.captureDone=true;
-        $('download').disabled=false;
         $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+file.name;
         if (selected.directStarted) postToFigma({type:'import-finish',graph});
+        else deliver();
       } catch (error) {
         if (selected.file !== file) return;
         $('status').textContent='Không khám phá được state ('+error.message+'); dùng layout cơ bản.';
         if (selected.directStarted) postToFigma({type:'import-error',message:error.message});
-        try { selected.graph=null; selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('download').disabled=false; }
-        catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; }
+        try {
+          selected.graph=null; selected.scene=await captureSceneGraph(html); selected.captureDone=true;
+          if (!inFigma) deliver();
+        }
+        catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; $('download').disabled=false; selected.started=false; }
       }
     }
     $('state-limit').textContent='(tối đa '+explorationLimits.maxStates+')';
-    $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)await show(file,await file.text());});
+    $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)show(file,await file.text());});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
-    $('download').addEventListener('click', inFigma ? importDirect : download);
+    $('download').addEventListener('click', start);
     if (inFigma) {
-      document.querySelector('[data-install]').hidden = true;
+      // the plugin is already installed here, and `hidden` alone loses to the button's display rule
+      document.querySelector('[data-install]').style.display = 'none';
       $('download').textContent = 'Tạo design trong Figma';
-      $('note').textContent = 'Chọn HTML, rồi bấm nút để tạo layer editable trực tiếp trong file Figma.';
+      $('download').classList.remove('fallback');
+      $('download').classList.add('install');
+      $('note').textContent = 'Chọn HTML, kiểm tra tên page, rồi bấm nút — plugin sẽ khám phá state và dựng design trong một lượt.';
       window.onmessage = event => {
         const message = event.data.pluginMessage;
         if (!message) return;

@@ -11,12 +11,22 @@ const uniquePageName = base => {
 };
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 
-async function renderScene(scene, title, pageName) {
+const STATE_GAP = 160;
+
+// ponytail: `target` lets streamed states share one page. Figma navigates between frames on the same
+// page, so a page per state only scattered the prototype across the file.
+async function renderScene(scene, title, pageName, target) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
-  const page = figma.createPage();
-  page.name = uniquePageName(pageName || title);
+  let page = target && target.page;
+  if (!page) {
+    page = figma.createPage();
+    page.name = uniquePageName(pageName || title);
+    if (target) target.page = page;
+  }
   const root = figma.createFrame();
   root.name = 'Screen / ' + title;
+  root.x = target ? target.offsetX || 0 : 0;
+  root.y = 0;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
   root.layoutMode = 'NONE';
   root.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
@@ -75,12 +85,13 @@ async function renderScene(scene, title, pageName) {
     }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
+  if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
   return { page, root, actionNodes, pageName: page.name };
 }
 
-async function renderState(state, title, pageName) {
+async function renderState(state, title, pageName, target) {
   if (!state || !state.id) throw new Error('State HTML không hợp lệ.');
-  return { stateId: state.id, ...await renderScene(state.scene, state.label || title, pageName) };
+  return { stateId: state.id, ...await renderScene(state.scene, state.label || title, pageName, target) };
 }
 
 const transitionTriggers = new Set(['ON_CLICK', 'ON_HOVER', 'ON_PRESS', 'ON_DRAG', 'ON_KEY_DOWN', 'ON_KEY_UP', 'AFTER_TIMEOUT', 'MOUSE_ENTER', 'MOUSE_LEAVE']);
@@ -130,6 +141,7 @@ const sessionFor = ({ spec, pageName } = {}) => {
     title,
     states: new Map(),
     rendered: new Map(),
+    target: { page: null, offsetX: 0 },
     queue: Promise.resolve(),
     failed: false
   };
@@ -139,8 +151,8 @@ async function renderOneState(state, current) {
   if (!state || !state.id) throw new Error('State HTML không hợp lệ.');
   if (current.rendered.has(state.id)) return current.rendered.get(state.id);
   current.states.set(state.id, state);
-  const pageName = current.basePageName + ' · ' + (state.label || state.id);
-  const rendered = await renderState(state, current.title, pageName);
+  const rendered = await renderState(state, current.title, current.basePageName, current.target);
+  rendered.root.name = 'State / ' + (state.label || state.id);
   current.rendered.set(state.id, rendered);
   return rendered;
 }

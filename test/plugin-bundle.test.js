@@ -21,7 +21,12 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /import-finish/);
   assert.match(bundle.ui, /Đang khám phá/);
   assert.match(bundle.ui, /states\.json/);
-  assert.match(bundle.ui, /\$\('download'\)\.disabled=!interactive \|\| \(!inFigma && !selected\.captureDone\)/);
+  // the file preview must not start a capture; only the button does
+  assert.match(bundle.ui, /function show\(file, html\)/);
+  assert.doesNotMatch(bundle.ui, /function show\(file, html\)[\s\S]{0,900}await capture(SceneGraph|StateGraph)/);
+  assert.match(bundle.ui, /\$\('download'\)\.addEventListener\('click', start\)/);
+  assert.match(bundle.ui, /type="checkbox" checked/);
+  assert.match(bundle.ui, /\[data-install\]'\)\.style\.display = 'none'/);
   assert.match(bundle.ui, /function pluginCode/);
   assert.match(bundle.ui, /pluginCode\(selected\.scene, selected\.pageName/);
   assert.match(bundle.ui, /id="page-name"/);
