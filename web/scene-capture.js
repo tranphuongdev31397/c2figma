@@ -246,7 +246,8 @@
     return `action-${slug}-${String(occurrence).padStart(2, '0')}`;
   }
 
-  function captureInteractivePath(actionKeyFor, serialize, token, width, height, settleMs, actionPath, minimumDelay) {
+  // Shared by both probes; serialized into the iframe with toString(), so it must stay self-contained.
+  function interactionToolkit(actionKeyFor, minimumDelay, settleMs) {
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const visible = element => {
       const style = getComputedStyle(element);
@@ -304,19 +305,71 @@
       await waitForAnimations();
       await sleep(settleMs);
     };
+    const replay = async actionPath => {
+      for (let depth = 0; depth < actionPath.length; depth += 1) {
+        const candidate = discover().find(item => item.key === actionPath[depth]);
+        if (!candidate) throw new Error('Không tìm thấy hành động ' + actionPath[depth]);
+        candidate.element.click();
+        await settleAfterAction();
+      }
+    };
+    const listActions = () => discover().map(({ key, label, trigger }) => ({ key, label, trigger }));
+    return { sleep, visible, discover, waitForStable, waitForAnimations, settleAfterAction, replay, listActions };
+  }
+
+  function captureInteractivePath(toolkit, actionKeyFor, serialize, token, width, height, settleMs, actionPath, minimumDelay) {
+    const tools = toolkit(actionKeyFor, minimumDelay, settleMs);
     (async () => {
       try {
-        await waitForStable();
-        for (let depth = 0; depth < actionPath.length; depth += 1) {
-          const candidates = discover();
-          const candidate = candidates.find(item => item.key === actionPath[depth]);
-          if (!candidate) throw new Error('Không tìm thấy hành động ' + actionPath[depth]);
-          candidate.element.click();
-          await settleAfterAction();
-        }
-        const candidates = discover();
-        const scene = serialize('', width, height);
-        parent.postMessage({ type: 'html-figma-state', token, scene, actions: candidates.map(({ key, label, trigger }) => ({ key, label, trigger })) }, '*');
+        await tools.waitForStable();
+        await tools.replay(actionPath);
+        parent.postMessage({ type: 'html-figma-state', token, scene: serialize('', width, height), actions: tools.listActions() }, '*');
+      } catch (error) {
+        parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*');
+      }
+    })();
+  }
+
+  // One iframe replays every path. Faster, because the page hydrates once, but each replay must first
+  // undo the previous one — so it verifies it is back at the baseline and flags the result when not.
+  function reusableProbe(toolkit, actionKeyFor, serialize, fingerprint, token, width, height, settleMs, minimumDelay) {
+    const tools = toolkit(actionKeyFor, minimumDelay, settleMs);
+    const snapshot = () => fingerprint(serialize('', width, height));
+    let baseline = null;
+
+    const resetToBaseline = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (snapshot() === baseline) return true;
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+        const closers = [...document.querySelectorAll('[data-close],[data-dismiss],[aria-label*="close" i],[aria-label*="đóng" i],[class*="close" i],[class*="backdrop" i],[class*="overlay" i]')]
+          .filter(element => tools.visible(element));
+        for (const closer of closers.slice(0, 4)) closer.click();
+        await tools.settleAfterAction();
+      }
+      return snapshot() === baseline;
+    };
+
+    window.addEventListener('message', async event => {
+      const data = event.data;
+      if (!data || data.token !== token || data.type !== 'run-path') return;
+      try {
+        const clean = await resetToBaseline();
+        await tools.replay(data.actionPath);
+        parent.postMessage({
+          type: 'html-figma-state', token, requestId: data.requestId,
+          scene: serialize('', width, height), actions: tools.listActions(), degraded: !clean
+        }, '*');
+      } catch (error) {
+        parent.postMessage({ type: 'html-figma-state-error', token, requestId: data.requestId, message: error.message }, '*');
+      }
+    });
+
+    (async () => {
+      try {
+        await tools.waitForStable();
+        baseline = snapshot();
+        parent.postMessage({ type: 'html-figma-ready', token }, '*');
       } catch (error) {
         parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*');
       }
@@ -340,15 +393,35 @@
   // A separate state cap only discarded states the run had already paid for.
   const LIMITS = { maxDepth: 2, maxActionsPerState: 8 };
 
+  const CAPTURE_MODES = {
+    fresh: 'Một iframe mới cho mỗi tương tác — chính xác nhất, chậm nhất.',
+    reuse: 'Dùng lại một iframe — nhanh hơn nhiều, nhưng phải tự đóng modal để quay về trạng thái gốc.'
+  };
+  const DEFAULT_CAPTURE_MODE = 'fresh';
+
   function captureStateGraph(html, options = {}, onState) {
     const profile = settleProfileFor(html);
     const settings = {
       width: 1440, height: 900, ...LIMITS,
       stateTimeoutMs: profile.timeoutMs, settleMs: 80, ...options
     };
-    const runPath = actionPath => new Promise((resolve, reject) => {
+    const makeIframe = token => {
       const iframe = document.createElement('iframe');
-      const token = 'state-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      iframe.setAttribute('sandbox', profile.bundled ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.setAttribute('data-capture-token', token);
+      iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
+      return iframe;
+    };
+    const inject = (iframe, script) => {
+      const probe = '<script>' + script + '<\/script>';
+      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+    };
+    const newToken = prefix => prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+
+    const runPath = actionPath => new Promise((resolve, reject) => {
+      const token = newToken('state');
+      const iframe = makeIframe(token);
       let timer;
       const finish = (handler, value) => {
         clearTimeout(timer);
@@ -362,15 +435,61 @@
         if (event.data.type === 'html-figma-state-error') finish(reject, new Error(event.data.message));
       };
       window.addEventListener('message', onMessage);
-      iframe.setAttribute('sandbox', profile.bundled ? 'allow-scripts allow-same-origin' : 'allow-scripts');
-      iframe.setAttribute('aria-hidden', 'true');
-      iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
       document.body.appendChild(iframe);
-      const script = '(' + captureInteractivePath.toString() + ')((' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + JSON.stringify(actionPath) + ',' + profile.minimumDelay + ');';
-      const probe = '<script>' + script + '<\/script>';
-      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+      inject(iframe, '(' + captureInteractivePath.toString() + ')((' + interactionToolkit.toString() + '),(' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + JSON.stringify(actionPath) + ',' + profile.minimumDelay + ');');
       timer = setTimeout(() => finish(reject, new Error('State capture timed out.')), settings.stateTimeoutMs);
     });
+
+    const reusableRunner = () => {
+      const token = newToken('reuse');
+      const iframe = makeIframe(token);
+      const waiting = new Map();
+      let requestIds = 0;
+      let degraded = 0;
+      let resolveReady;
+      let rejectReady;
+      const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+      const onMessage = event => {
+        const data = event.data;
+        if (event.source !== iframe.contentWindow || !data || data.token !== token) return;
+        if (data.type === 'html-figma-ready') return resolveReady();
+        const pending = waiting.get(data.requestId);
+        if (!pending) {
+          if (data.type === 'html-figma-state-error') rejectReady(new Error(data.message));
+          return;
+        }
+        waiting.delete(data.requestId);
+        clearTimeout(pending.timer);
+        if (data.type === 'html-figma-state') {
+          if (data.degraded) { degraded += 1; if (settings.onNotice) settings.onNotice({ type: 'reuse-degraded', degraded }); }
+          pending.resolve(data);
+        }
+        if (data.type === 'html-figma-state-error') pending.reject(new Error(data.message));
+      };
+      window.addEventListener('message', onMessage);
+      document.body.appendChild(iframe);
+      inject(iframe, '(' + reusableProbe.toString() + ')((' + interactionToolkit.toString() + '),(' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),(' + sceneFingerprint.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + profile.minimumDelay + ');');
+      const readyTimer = setTimeout(() => rejectReady(new Error('Reused iframe không sẵn sàng.')), profile.timeoutMs);
+      ready.then(() => clearTimeout(readyTimer), () => clearTimeout(readyTimer));
+
+      return {
+        run: async actionPath => {
+          await ready;
+          const requestId = requestIds += 1;
+          const result = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => { waiting.delete(requestId); reject(new Error('State capture timed out.')); }, settings.stateTimeoutMs);
+            waiting.set(requestId, { resolve, reject, timer });
+          });
+          iframe.contentWindow.postMessage({ type: 'run-path', token, requestId, actionPath }, '*');
+          return result;
+        },
+        dispose: () => { window.removeEventListener('message', onMessage); iframe.remove(); },
+        degradedCount: () => degraded
+      };
+    };
+
+    const mode = CAPTURE_MODES[settings.mode] ? settings.mode : DEFAULT_CAPTURE_MODE;
+    const runner = mode === 'reuse' ? reusableRunner() : { run: runPath, dispose() {}, degradedCount: () => 0 };
 
     return (async () => {
       const graph = { version: 2, viewport: { width: settings.width, height: settings.height }, states: [], transitions: [] };
@@ -383,12 +502,14 @@
         attempted: progress.attempted, planned: progress.planned, states: graph.states.length
       });
       const attempt = async actionPath => {
-        try { return await runPath(actionPath); }
+        try { return await runner.run(actionPath); }
         catch (_) { return null; }
         finally { progress.attempted += 1; report(); }
       };
-      const baseline = await attempt([]);
-      if (!baseline) throw new Error('Không dựng được layout gốc.');
+      let baseline;
+      try { baseline = await attempt([]); }
+      catch (error) { runner.dispose(); throw error; }
+      if (!baseline) { runner.dispose(); throw new Error('Không dựng được layout gốc.'); }
       const addState = async (actionPath, result, label) => {
         const fingerprint = sceneFingerprint(result.scene);
         let state = fingerprintToState.get(fingerprint);
@@ -429,6 +550,8 @@
           if (!expanded.has(destination.id)) enqueue(queue, destination, result.actions, current.depth + 1);
         }
       }
+      runner.dispose();
+      graph.capture = { mode, attempted: progress.attempted, degraded: runner.degradedCount() };
       return graph;
     })();
   }
@@ -438,4 +561,6 @@
   global.settleProfileFor = settleProfileFor;
   global.sceneFingerprintFor = sceneFingerprint;
   global.explorationLimits = LIMITS;
+  global.captureModes = CAPTURE_MODES;
+  global.defaultCaptureMode = DEFAULT_CAPTURE_MODE;
 })(window);

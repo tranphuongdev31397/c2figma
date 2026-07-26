@@ -61,6 +61,33 @@ test('bounds exploration by depth rather than by a state count', () => {
   assert.ok(explorationLimits.maxActionsPerState > 0);
 });
 
+test('offers a reused-iframe mode without making it the default', () => {
+  const { captureModes, defaultCaptureMode } = load();
+
+  assert.deepEqual(Object.keys(captureModes).sort(), ['fresh', 'reuse']);
+  assert.equal(defaultCaptureMode, 'fresh', 'a fresh iframe per path stays the trusted baseline');
+  // reuse trades isolation for speed, so it has to prove it got back to the baseline
+  assert.match(source, /resetToBaseline/);
+  assert.match(source, /html-figma-ready/);
+  assert.match(source, /reuse-degraded/);
+});
+
+test('both probes serialize into valid injectable scripts', () => {
+  // the probes reach the iframe as source text, so a syntax slip only shows up at run time
+  const scope = { window: {}, document: { createElement: () => ({ setAttribute() {}, style: {} }) } };
+  scope.window.document = scope.document;
+  vm.runInNewContext(source, scope);
+
+  const injected = [...source.matchAll(/inject\(iframe, '\(' \+ (\w+)\.toString\(\)/g)].map(match => match[1]);
+  assert.deepEqual(injected.sort(), ['captureInteractivePath', 'reusableProbe']);
+
+  for (const probe of injected) {
+    const body = source.match(new RegExp('\\n  function ' + probe + '\\([\\s\\S]*?\\n  \\}\\n'));
+    assert.ok(body, probe + ' must be a top-level function so toString() carries it whole');
+    assert.doesNotThrow(() => new vm.Script('(function(){' + body[0] + '})'), probe + ' is not valid JavaScript');
+  }
+});
+
 test('reports attempted paths, not only discovered states', () => {
   // most paths dedupe away, so a states-only counter sits still while the run is busy
   assert.match(source, /onProgress/);

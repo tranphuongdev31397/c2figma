@@ -21,6 +21,8 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /import-finish/);
   assert.match(bundle.ui, /Đang thử.*tương tác/);
   assert.match(bundle.ui, /onProgress/);
+  assert.match(bundle.ui, /mode:\$\('mode'\)\.value/);
+  assert.match(bundle.ui, /captureModes/);
   assert.match(bundle.ui, /states\.json/);
   // the file preview must not start a capture; only the button does
   assert.match(bundle.ui, /function show\(file, html\)/);

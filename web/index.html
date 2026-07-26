@@ -40,6 +40,9 @@
     .page-name input { width: 100%; height: 38px; border: 1px solid #dcdcdc; border-radius: 8px; padding: 0 11px; color: #171717; font: 500 13px inherit; }
     .page-name input:focus { outline: 2px solid #c8e6cc; border-color: #16993b; }
     .interactive { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: #444; font-size: 12px; }
+    .mode { margin-top: 10px; display: grid; gap: 4px; font-size: 12px; color: #444; }
+    .mode select { height: 32px; border: 1px solid #e5e5e5; border-radius: 8px; padding: 0 8px; font: inherit; background: white; }
+    .mode small { color: #8a8a8a; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
     .chip { border: 1px solid #dbe8d7; background: #ebf3e0; color: #16993b; border-radius: 999px; padding: 5px 9px; font-size: 12px; }
     .note { color: #737373; font-size: 12px; line-height: 1.5; margin: 18px 0 0; }
@@ -61,6 +64,11 @@
       </label>
       <input id="file" type="file" accept=".html,.htm,text/html">
       <label class="interactive"><input id="interactive" type="checkbox" checked> Khám phá các state tương tác <span id="state-limit"></span></label>
+      <div class="mode" id="mode-field">
+        <label for="mode">Cách chụp</label>
+        <select id="mode"></select>
+        <small id="mode-hint"></small>
+      </div>
       <div id="summary">
         <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
         <div class="page-name" id="page-name-field" hidden><label for="page-name">Tên page Figma</label><input id="page-name" type="text" maxlength="120" autocomplete="off"></div>
@@ -166,15 +174,21 @@
         if (selected.directStarted) postToFigma({type:'import-state',state,transitions:graph.transitions});
       };
       // most paths dedupe into an existing state, so a states-only counter looks stuck mid-run
+      let degraded = 0;
       const onProgress = ({attempted, planned, states}) => {
         if (selected.file !== file) return;
-        $('status').textContent='Đang thử '+attempted+'/'+planned+' tương tác · '+states+' state'+(selected.directStarted?' — đang gửi sang Figma…':'…');
+        $('status').textContent='Đang thử '+attempted+'/'+planned+' tương tác · '+states+' state'
+          +(degraded?' · '+degraded+' lần không về được trạng thái gốc':'')
+          +(selected.directStarted?' — đang gửi sang Figma…':'…');
       };
+      const onNotice = notice => { if (notice.type === 'reuse-degraded') degraded = notice.degraded; };
       try {
-        const graph=await captureStateGraph(html,{onProgress},onState);
+        const graph=await captureStateGraph(html,{onProgress,onNotice,mode:$('mode').value},onState);
         if (selected.file !== file) return;
         selected.graph=graph; selected.scene ||= graph.states[0]?.scene; selected.captureDone=true;
-        $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+file.name;
+        const capture=graph.capture||{};
+        $('status').textContent='Đã khám phá '+graph.states.length+' state từ '+capture.attempted+' tương tác'
+          +(capture.degraded?' — '+capture.degraded+' lần chụp sau khi không về được trạng thái gốc (đáng ngờ)':'');
         if (selected.directStarted) postToFigma({type:'import-finish',graph});
         else deliver();
       } catch (error) {
@@ -189,6 +203,13 @@
       }
     }
     $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp)';
+    $('mode').innerHTML=Object.keys(captureModes).map(key=>'<option value="'+key+'"'+(key===defaultCaptureMode?' selected':'')+'>'+(key==='fresh'?'Chính xác (iframe mới mỗi lần)':'Nhanh (dùng lại iframe)')+'</option>').join('');
+    const showModeHint=()=>{$('mode-hint').textContent=captureModes[$('mode').value];};
+    showModeHint();
+    $('mode').addEventListener('change',showModeHint);
+    const syncModeField=()=>{$('mode-field').hidden=!$('interactive').checked;};
+    syncModeField();
+    $('interactive').addEventListener('change',syncModeField);
     $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)show(file,await file.text());});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
     $('download').addEventListener('click', start);
