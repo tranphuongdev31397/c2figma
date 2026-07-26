@@ -113,12 +113,13 @@
         ids.set(element, id);
         let parent = element.parentElement;
         while (parent && !ids.has(parent)) parent = parent.parentElement;
-        const border = [
-          { width: number(style.borderTopWidth), color: style.borderTopColor },
-          { width: number(style.borderRightWidth), color: style.borderRightColor },
-          { width: number(style.borderBottomWidth), color: style.borderBottomColor },
-          { width: number(style.borderLeftWidth), color: style.borderLeftColor }
-        ].reduce((best, side) => side.width >= best.width ? side : best, { width: 0, color: '' });
+        const border = {
+          top: { width: number(style.borderTopWidth), color: parseColor(style.borderTopColor) },
+          right: { width: number(style.borderRightWidth), color: parseColor(style.borderRightColor) },
+          bottom: { width: number(style.borderBottomWidth), color: parseColor(style.borderBottomColor) },
+          left: { width: number(style.borderLeftWidth), color: parseColor(style.borderLeftColor) }
+        };
+        const stroke = [border.top, border.right, border.bottom, border.left].find(side => side.width) || { width: 0, color: null };
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
         nodes.push({
           id,
@@ -130,8 +131,9 @@
           width: rect.width,
           height: rect.height,
           fill: parseColor(style.backgroundColor),
-          stroke: border.width ? parseColor(border.color) : null,
-          strokeWidth: border.width,
+          stroke: stroke.color,
+          strokeWidth: stroke.width,
+          borders: border,
           radius,
           position: style.position,
           opacity: Number(style.opacity) || 1,

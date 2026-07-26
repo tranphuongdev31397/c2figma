@@ -24,3 +24,8 @@ test('recognizes SVG roots regardless of HTML tag-name casing', () => {
 test('preserves positioned layers for renderer stacking', () => {
   assert.match(source, /position: style\.position/);
 });
+
+test('captures border widths per side instead of flattening them', () => {
+  assert.match(source, /top: \{ width: number\(style\.borderTopWidth\)/);
+  assert.match(source, /bottom: \{ width: number\(style\.borderBottomWidth\)/);
+});

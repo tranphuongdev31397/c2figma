@@ -36,9 +36,16 @@ async function renderScene(scene, title) {
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       node.fills = item.fill ? [solid(item.fill)] : [];
-      if (item.stroke && item.strokeWidth) {
-        node.strokes = [solid(item.stroke)];
-        node.strokeWeight = Math.max(1, item.strokeWidth);
+      const borders = item.borders;
+      const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
+      const borderPaint = borders ? [borders.top, borders.right, borders.bottom, borders.left].find(side => side.width)?.color : item.stroke;
+      if (borderPaint && Math.max(weights.top, weights.right, weights.bottom, weights.left)) {
+        node.strokes = [solid(borderPaint)];
+        node.strokeWeight = Math.max(weights.top, weights.right, weights.bottom, weights.left);
+        node.strokeTopWeight = weights.top;
+        node.strokeRightWeight = weights.right;
+        node.strokeBottomWeight = weights.bottom;
+        node.strokeLeftWeight = weights.left;
       }
       if (item.radius) node.cornerRadius = item.radius;
     }

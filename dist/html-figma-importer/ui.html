@@ -185,12 +185,13 @@
         ids.set(element, id);
         let parent = element.parentElement;
         while (parent && !ids.has(parent)) parent = parent.parentElement;
-        const border = [
-          { width: number(style.borderTopWidth), color: style.borderTopColor },
-          { width: number(style.borderRightWidth), color: style.borderRightColor },
-          { width: number(style.borderBottomWidth), color: style.borderBottomColor },
-          { width: number(style.borderLeftWidth), color: style.borderLeftColor }
-        ].reduce((best, side) => side.width >= best.width ? side : best, { width: 0, color: '' });
+        const border = {
+          top: { width: number(style.borderTopWidth), color: parseColor(style.borderTopColor) },
+          right: { width: number(style.borderRightWidth), color: parseColor(style.borderRightColor) },
+          bottom: { width: number(style.borderBottomWidth), color: parseColor(style.borderBottomColor) },
+          left: { width: number(style.borderLeftWidth), color: parseColor(style.borderLeftColor) }
+        };
+        const stroke = [border.top, border.right, border.bottom, border.left].find(side => side.width) || { width: 0, color: null };
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
         nodes.push({
           id,
@@ -202,8 +203,9 @@
           width: rect.width,
           height: rect.height,
           fill: parseColor(style.backgroundColor),
-          stroke: border.width ? parseColor(border.color) : null,
-          strokeWidth: border.width,
+          stroke: stroke.color,
+          strokeWidth: stroke.width,
+          borders: border,
           radius,
           position: style.position,
           opacity: Number(style.opacity) || 1,
@@ -326,9 +328,16 @@ async function renderScene(scene, title) {
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       paint(node, item.fill, 1);
-      if (item.stroke && item.strokeWidth) {
-        node.strokes = [solid(color(item.stroke,{r:0.8,g:0.8,b:0.8}), item.stroke.a ?? 1)];
-        node.strokeWeight = Math.max(1, item.strokeWidth);
+      const borders = item.borders;
+      const weights = borders ? {top:borders.top.width,right:borders.right.width,bottom:borders.bottom.width,left:borders.left.width} : {top:item.strokeWidth,right:item.strokeWidth,bottom:item.strokeWidth,left:item.strokeWidth};
+      const borderPaint = borders ? [borders.top,borders.right,borders.bottom,borders.left].find(side => side.width)?.color : item.stroke;
+      if (borderPaint && Math.max(weights.top, weights.right, weights.bottom, weights.left)) {
+        node.strokes = [solid(color(borderPaint,{r:0.8,g:0.8,b:0.8}), borderPaint.a ?? 1)];
+        node.strokeWeight = Math.max(weights.top, weights.right, weights.bottom, weights.left);
+        node.strokeTopWeight = weights.top;
+        node.strokeRightWeight = weights.right;
+        node.strokeBottomWeight = weights.bottom;
+        node.strokeLeftWeight = weights.left;
       }
       if (item.radius) node.cornerRadius = item.radius;
     }

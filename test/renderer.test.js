@@ -25,3 +25,9 @@ test('raises positioned layers above normal siblings', () => {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /item\.position\s*===\s*'absolute'/);
   }
 });
+
+test('renders border weights independently per side', () => {
+  for (const file of renderers) {
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /strokeBottomWeight/);
+  }
+});
