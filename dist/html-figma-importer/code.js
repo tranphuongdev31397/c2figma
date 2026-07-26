@@ -55,7 +55,7 @@ async function render(spec) {
     row.strokes = [solid(C.line)]; row.strokeWeight = 1;
     await text(row, labels[i], 18, 14, 560, 13, i ? 'Regular' : 'Semi Bold');
   }
-  figma.currentPage = page;
+  await figma.setCurrentPageAsync(page);
 }
 
 figma.showUI(__html__, { width: 720, height: 620 });

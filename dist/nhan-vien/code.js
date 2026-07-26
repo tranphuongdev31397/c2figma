@@ -21,6 +21,6 @@ async function main() {
   const labels=SPEC.labels.length?SPEC.labels:['Primary action','Secondary action','Active'];
   labels.slice(0,5).forEach(async (label,i)=>{ const row=rect(body,'Content / '+label,20,94+i*58,1088,48,C.white,8); row.strokes=[solid(C.line)]; row.strokeWeight=1; await t(row,label,18,14,560,13,i===0?'Semi Bold':'Regular'); });
   console.assert(root.width===1440 && root.height===900,'Expected desktop screen');
-  figma.currentPage=page; figma.closePlugin('Created editable visual scaffold.');
+  await figma.setCurrentPageAsync(page); figma.closePlugin('Created editable visual scaffold.');
 }
 main();
