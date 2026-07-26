@@ -105,7 +105,7 @@ async function renderGraph(graph, title, basePageName) {
 const embeddedGraph = () => { try { return STATE_GRAPH; } catch (error) { return null; } };
 async function boot() {
   const graph = embeddedGraph();
-  if (graph) {
+  if (graph?.states?.length) {
     try {
       await renderGraph(graph, CONTENT_TITLE || 'Imported HTML', DEFAULT_PAGE_NAME || CONTENT_TITLE || 'Imported HTML');
       figma.closePlugin('Đã tạo design editable từ HTML.');
