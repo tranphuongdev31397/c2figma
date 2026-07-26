@@ -104,7 +104,8 @@
       const elements = [...document.querySelectorAll('*')].filter(element => !ignored.has(element.tagName));
 
       for (const element of elements) {
-        if (element.tagName !== 'SVG' && element.closest('svg')) continue;
+        const isSvg = element.tagName.toLowerCase() === 'svg';
+        if (!isSvg && element.closest('svg')) continue;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         if (!visible(element, style, rect) || technical(element) || nodes.length >= 2000) continue;
@@ -122,7 +123,7 @@
         nodes.push({
           id,
           parentId: parent ? ids.get(parent) : null,
-          kind: element.tagName === 'SVG' ? 'svg' : 'box',
+          kind: isSvg ? 'svg' : 'box',
           name: element.getAttribute('aria-label') || element.getAttribute('data-testid') || element.tagName.toLowerCase() + ' / ' + id,
           x: rect.left,
           y: rect.top,
@@ -137,7 +138,7 @@
           fontSize: number(style.fontSize),
           fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
           color: parseColor(style.color),
-          svg: element.tagName === 'SVG' ? element.outerHTML.replace(/currentColor/gi, colorHex(style.color)) : null
+          svg: isSvg ? element.outerHTML.replace(/currentColor/gi, colorHex(style.color)) : null
         });
 
         for (const child of element.childNodes) {

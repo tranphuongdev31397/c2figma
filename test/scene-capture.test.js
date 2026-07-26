@@ -13,6 +13,10 @@ test('waits for the rendered DOM to settle before serializing a bundled page', (
 
 test('captures native control text and SVG artwork as real scene layers', () => {
   assert.match(source, /element\.placeholder/);
-  assert.match(source, /kind: element\.tagName === 'SVG' \? 'svg'/);
+  assert.match(source, /kind: isSvg \? 'svg'/);
   assert.match(source, /outerHTML/);
+});
+
+test('recognizes SVG roots regardless of HTML tag-name casing', () => {
+  assert.match(source, /element\.tagName\.toLowerCase\(\) === 'svg'/);
 });
