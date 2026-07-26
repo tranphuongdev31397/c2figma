@@ -132,6 +132,7 @@
         };
         const stroke = [border.top, border.right, border.bottom, border.left].find(side => side.width) || { width: 0, color: null };
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
+        const actionKey = element.getAttribute('data-c2figma-action-key');
         nodes.push({
           id,
           parentId: parent ? ids.get(parent) : null,
@@ -153,7 +154,8 @@
           fontSize: number(style.fontSize),
           fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
           color: parseColor(style.color),
-          svg: isSvg ? element.outerHTML.replace(/currentColor/gi, colorHex(style.color)) : null
+          svg: isSvg ? element.outerHTML.replace(/currentColor/gi, colorHex(style.color)) : null,
+          ...(actionKey ? { actionKey } : {})
         });
 
         for (const child of element.childNodes) {
@@ -212,15 +214,173 @@
         }
       }
 
+      const scene = { version: 1, viewport: { width, height }, nodes };
+      if (!token) return scene;
       parent.postMessage({
         type: 'html-figma-scene',
         token,
-        scene: { version: 1, viewport: { width, height }, nodes }
+        scene
       }, '*');
     } catch (error) {
+      if (!token) throw error;
       parent.postMessage({ type: 'html-figma-scene-error', token, message: error.message }, '*');
     }
   }
 
+  function actionKeyFor(element, occurrence) {
+    const raw = element.getAttribute('data-c2figma-action')
+      || element.id
+      || element.getAttribute('aria-label')
+      || element.getAttribute('data-action')
+      || element.textContent
+      || element.tagName;
+    const slug = raw.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 48) || 'action';
+    return `action-${slug}-${String(occurrence).padStart(2, '0')}`;
+  }
+
+  function captureInteractivePath(actionKeyFor, serialize, token, width, height, settleMs, actionPath) {
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const visible = element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0
+        && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0;
+    };
+    const discover = () => {
+      const selectors = 'button,a,summary,select,input,textarea,[role="button"],[aria-expanded],[aria-haspopup],[data-action],[data-state],[onclick],[style*="cursor: pointer"]';
+      const seen = new Set();
+      return [...document.querySelectorAll(selectors)].filter(element => {
+        if (seen.has(element) || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
+        const role = (element.getAttribute('role') || '').toLowerCase();
+        if (element.getAttribute('aria-hidden') === 'true' || role === 'presentation' || role === 'none') return false;
+        const href = element.getAttribute('href') || '';
+        if (element.tagName === 'A' && !href.startsWith('#') && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
+        seen.add(element);
+        return true;
+      }).map((element, index) => {
+        const key = actionKeyFor(element, index + 1);
+        element.setAttribute('data-c2figma-action-key', key);
+        return { element, key, label: (element.getAttribute('aria-label') || element.textContent || element.tagName).trim().replace(/\s+/g, ' ').slice(0, 80), trigger: 'ON_CLICK' };
+      });
+    };
+    const waitForStable = () => new Promise(resolve => {
+      let previous = '';
+      let stableTicks = 0;
+      const check = () => {
+        const signature = [document.readyState, document.querySelectorAll('*').length, document.body ? document.body.innerText : ''].join('|');
+        if (signature === previous) stableTicks += 1;
+        else { previous = signature; stableTicks = 0; }
+        if (stableTicks >= 2) return resolve();
+        setTimeout(check, 40);
+      };
+      check();
+    });
+    (async () => {
+      try {
+        await waitForStable();
+        for (let depth = 0; depth < actionPath.length; depth += 1) {
+          const candidates = discover();
+          const candidate = candidates.find(item => item.key === actionPath[depth]);
+          if (!candidate) throw new Error('Không tìm thấy hành động ' + actionPath[depth]);
+          candidate.element.click();
+          await sleep(settleMs);
+        }
+        const candidates = discover();
+        const scene = serialize('', width, height);
+        parent.postMessage({ type: 'html-figma-state', token, scene, actions: candidates.map(({ key, label, trigger }) => ({ key, label, trigger })) }, '*');
+      } catch (error) {
+        parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*');
+      }
+    })();
+  }
+
+  function sceneFingerprint(scene) {
+    return JSON.stringify(scene.nodes.map(node => ({
+      kind: node.kind,
+      bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value * 10) / 10),
+      text: node.text || '',
+      fill: node.fill,
+      stroke: node.stroke,
+      opacity: node.opacity,
+      visibility: node.visibility !== false
+    })));
+  }
+
+  function captureStateGraph(html, options = {}, onState) {
+    const settings = {
+      width: 1440, height: 900, maxDepth: 2, maxStates: 8, maxActionsPerState: 8,
+      stateTimeoutMs: 1500, settleMs: 80, ...options
+    };
+    const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
+    const runPath = actionPath => new Promise((resolve, reject) => {
+      const iframe = document.createElement('iframe');
+      const token = 'state-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      let timer;
+      const finish = (handler, value) => {
+        clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        iframe.remove();
+        handler(value);
+      };
+      const onMessage = event => {
+        if (event.source !== iframe.contentWindow || !event.data || event.data.token !== token) return;
+        if (event.data.type === 'html-figma-state') finish(resolve, event.data);
+        if (event.data.type === 'html-figma-state-error') finish(reject, new Error(event.data.message));
+      };
+      window.addEventListener('message', onMessage);
+      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
+      document.body.appendChild(iframe);
+      const script = '(' + captureInteractivePath.toString() + ')((' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + JSON.stringify(actionPath) + ');';
+      const probe = '<script>' + script + '<\/script>';
+      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+      timer = setTimeout(() => finish(reject, new Error('State capture timed out.')), settings.stateTimeoutMs);
+    });
+
+    return (async () => {
+      const graph = { version: 2, viewport: { width: settings.width, height: settings.height }, states: [], transitions: [] };
+      const fingerprintToState = new Map();
+      const transitionKeys = new Set();
+      const baseline = await runPath([]);
+      const addState = async (actionPath, result, label) => {
+        const fingerprint = sceneFingerprint(result.scene);
+        let state = fingerprintToState.get(fingerprint);
+        if (!state) {
+          if (graph.states.length >= settings.maxStates) return null;
+          state = { id: 'state-' + String(graph.states.length).padStart(2, '0'), label, actionPath, scene: result.scene };
+          fingerprintToState.set(fingerprint, state);
+          graph.states.push(state);
+          if (onState) await onState(state, graph);
+        }
+        return state;
+      };
+      const first = await addState([], baseline, 'Default');
+      const queue = [{ state: first, actions: baseline.actions, depth: 0 }];
+      const expanded = new Set();
+      while (queue.length && graph.states.length < settings.maxStates) {
+        const current = queue.shift();
+        if (!current.state || current.depth >= settings.maxDepth) continue;
+        if (expanded.has(current.state.id)) continue;
+        expanded.add(current.state.id);
+        for (const action of current.actions.slice(0, settings.maxActionsPerState)) {
+          const actionPath = current.state.actionPath.concat(action.key);
+          let result;
+          try { result = await runPath(actionPath); } catch (_) { continue; }
+          const destination = await addState(actionPath, result, action.label || action.key);
+          if (!destination) continue;
+          const transitionKey = [current.state.id, destination.id, action.key].join('|');
+          if (!transitionKeys.has(transitionKey)) {
+            transitionKeys.add(transitionKey);
+            graph.transitions.push({ from: current.state.id, to: destination.id, actionKey: action.key, trigger: 'ON_CLICK' });
+          }
+          if (!expanded.has(destination.id)) queue.push({ state: destination, actions: result.actions, depth: current.depth + 1 });
+        }
+      }
+      return graph;
+    })();
+  }
+
   global.captureSceneGraph = captureSceneGraph;
+  global.captureStateGraph = captureStateGraph;
 })(window);

@@ -12,6 +12,7 @@ const paint = (node, value, opacity) => { node.fills = value ? [solid(color(valu
 const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold' : 'Regular';
 const uniquePageName = base => { const wanted=String(base || 'Imported HTML').trim() || 'Imported HTML', names=new Set(figma.root.children.map(page=>page.name)); if(!names.has(wanted)) return wanted; let index=2; while(names.has(wanted+' '+index)) index += 1; return wanted+' '+index; };
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
+const post = payload => { try { figma.ui.postMessage(payload); } catch (error) {} };
 async function renderScene(scene, title, pageName) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   const page = figma.createPage();
@@ -24,6 +25,7 @@ async function renderScene(scene, title, pageName) {
   page.appendChild(root);
   const byId = new Map([['__root__', root]]);
   const bounds = new Map([['__root__', {x:0,y:0}]]);
+  const actionNodes = new Map();
   const positioned = [];
   await figma.setCurrentPageAsync(page);
   for (let index = 0; index < scene.nodes.length; index += 1) {
@@ -63,26 +65,71 @@ async function renderScene(scene, title, pageName) {
     }
     parent.appendChild(node);
     if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({parent,node});
+    if (item.actionKey) actionNodes.set(item.actionKey, node);
     byId.set(item.id, node);
     bounds.set(item.id, {x:item.x, y:item.y});
-    if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) { figma.ui.postMessage({type:'progress', current:index + 1, total:scene.nodes.length, title}); await yieldToFigma(); }
+    if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) { post({type:'progress', current:index + 1, total:scene.nodes.length, title}); await yieldToFigma(); }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
-  return page.name;
+  return {page, root, actionNodes, pageName:page.name};
 }
-figma.showUI(__html__, {width:720,height:620});
-figma.ui.onmessage = async message => {
-  if (message.type !== 'import') return;
-  try {
-    const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
-    const pageName = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
-    figma.notify('Đã tạo design editable trong Figma.');
-    figma.ui.postMessage({type:'imported', title, pageName});
-    figma.closePlugin('Đã tạo design editable từ HTML.');
-  } catch (error) {
-    figma.notify('Không thể tạo design: ' + error.message, {error:true});
-    figma.ui.postMessage({type:'error', message:error.message});
+const transitionTriggers = new Set(['ON_CLICK','ON_HOVER','ON_PRESS','ON_DRAG','ON_KEY_DOWN','ON_KEY_UP','AFTER_TIMEOUT','MOUSE_ENTER','MOUSE_LEAVE']);
+async function applyTransitions(graph, renderedStates) {
+  let skipped = 0;
+  for (const transition of graph.transitions || []) {
+    const source = renderedStates.get(transition.from);
+    const destination = renderedStates.get(transition.to);
+    const sourceNode = source?.actionNodes.get(transition.actionKey);
+    const trigger = transition.trigger || 'ON_CLICK';
+    if (!sourceNode || !destination?.root || !transitionTriggers.has(trigger)) { skipped += 1; continue; }
+    try {
+      await sourceNode.setReactionsAsync([{trigger:{type:trigger}, actions:[{type:'NODE', destinationId:destination.root.id, navigation:'NAVIGATE', transition:{type:'DISSOLVE', duration:0.2, easing:{type:'EASE_IN_AND_OUT'}}}]}]);
+    } catch (error) { skipped += 1; }
   }
-};`;
+  if (skipped) { figma.notify('Skipped ' + skipped + ' prototype transitions.', {error:true}); post({type:'transition-skipped', skipped}); }
+  return skipped;
+}
+async function renderGraph(graph, title, basePageName) {
+  if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph không hợp lệ.');
+  const rendered = new Map();
+  for (let index = 0; index < graph.states.length; index += 1) {
+    const state = graph.states[index];
+    if (!state?.id || rendered.has(state.id)) continue;
+    rendered.set(state.id, await renderScene(state.scene, state.label || title, basePageName + ' · ' + (state.label || state.id)));
+    post({type:'state-progress', current:index + 1, total:graph.states.length, title});
+  }
+  await applyTransitions(graph, rendered);
+  return rendered;
+}
+// ponytail: index.html only appends STATE_GRAPH for interactive exports, so read it defensively instead of branching in the generator.
+const embeddedGraph = () => { try { return STATE_GRAPH; } catch (error) { return null; } };
+async function boot() {
+  const graph = embeddedGraph();
+  if (graph?.states?.length) {
+    try {
+      await renderGraph(graph, CONTENT_TITLE || 'Imported HTML', DEFAULT_PAGE_NAME || CONTENT_TITLE || 'Imported HTML');
+      figma.closePlugin('Đã tạo design editable từ HTML.');
+    } catch (error) {
+      figma.notify('Không thể tạo design: ' + error.message, {error:true});
+      figma.closePlugin();
+    }
+    return;
+  }
+  figma.showUI(__html__, {width:720,height:620});
+  figma.ui.onmessage = async message => {
+    if (message.type !== 'import') return;
+    try {
+      const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
+      const scene = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
+      figma.notify('Đã tạo design editable trong Figma.');
+      post({type:'imported', title, pageName:scene.pageName});
+      figma.closePlugin('Đã tạo design editable từ HTML.');
+    } catch (error) {
+      figma.notify('Không thể tạo design: ' + error.message, {error:true});
+      post({type:'error', message:error.message});
+    }
+  };
+}
+setTimeout(boot, 0);`;
   };
 })(window);
