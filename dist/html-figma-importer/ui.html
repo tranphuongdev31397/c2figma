@@ -38,6 +38,9 @@
     .page-name label { color: #737373; font-size: 12px; font-weight: 600; }
     .page-name input { width: 100%; height: 38px; border: 1px solid #dcdcdc; border-radius: 8px; padding: 0 11px; color: #171717; font: 500 13px inherit; }
     .page-name input:focus { outline: 2px solid #c8e6cc; border-color: #16993b; }
+    .state-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; color: #525252; font-size: 12px; line-height: 1.4; }
+    .state-option input { margin: 2px 0 0; accent-color: #16993b; }
+    .state-option small { display: block; color: #8a8a8a; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
     .chip { border: 1px solid #dbe8d7; background: #ebf3e0; color: #16993b; border-radius: 999px; padding: 5px 9px; font-size: 12px; }
     .note { color: #737373; font-size: 12px; line-height: 1.5; margin: 18px 0 0; }
@@ -58,6 +61,7 @@
         <div><strong>Kéo thả file HTML vào đây</strong><span>hoặc bấm để chọn file từ máy</span></div>
       </label>
       <input id="file" type="file" accept=".html,.htm,text/html">
+      <label class="state-option"><input id="interactive" type="checkbox"><span>Khám phá trạng thái tương tác<small>Thử các nút, row, tab và modal phổ biến (tối đa 8 state).</small></span></label>
       <div id="summary">
         <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
         <div class="page-name" id="page-name-field" hidden><label for="page-name">Tên page Figma</label><input id="page-name" type="text" maxlength="120" autocomplete="off"></div>
@@ -121,6 +125,106 @@
     });
   }
 
+  function captureStateGraph(html, options = {}) {
+    const settings = { ...DEFAULTS, maxDepth: 2, maxStates: 8, maxActions: 8, ...options };
+    const queue = [{ path: [], labels: [] }];
+    const queued = new Set(['']);
+    const fingerprints = new Set();
+    const states = [];
+    const visit = async () => {
+      while (queue.length && states.length < settings.maxStates) {
+        const task = queue.shift();
+        let result;
+        try { result = await captureStatePath(html, task.path, settings); }
+        catch (error) { if (!states.length) throw error; continue; }
+        const fingerprint = JSON.stringify(result.scene.nodes.map(node => [node.kind, Math.round(node.x), Math.round(node.y), Math.round(node.width), Math.round(node.height), node.text, node.name, node.fill, node.stroke, node.opacity]));
+        if (fingerprints.has(fingerprint)) continue;
+        fingerprints.add(fingerprint);
+        states.push({ id: 'state-' + String(states.length + 1).padStart(2, '0'), label: task.labels.join(' → ') || 'Default', actionPath: task.path, scene: result.scene });
+        if (task.path.length >= settings.maxDepth) continue;
+        result.actions.slice(0, settings.maxActions).forEach(action => {
+          const path = [...task.path, action.index], key = path.join('.');
+          if (queued.has(key)) return;
+          queued.add(key);
+          queue.push({ path, labels: [...task.labels, action.label] });
+        });
+      }
+      return { version: 2, viewport: { width: settings.width, height: settings.height }, states };
+    };
+    return visit();
+  }
+
+  function captureStatePath(html, path, settings) {
+    return new Promise((resolve, reject) => {
+      const iframe = document.createElement('iframe');
+      const token = 'state-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      let timer;
+      let settled = false;
+      const finish = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        iframe.remove();
+        handler(value);
+      };
+      const onMessage = event => {
+        if (event.source !== iframe.contentWindow || !event.data || event.data.token !== token) return;
+        if (event.data.type === 'html-figma-state') finish(resolve, event.data);
+        if (event.data.type === 'html-figma-state-error') finish(reject, new Error(event.data.message));
+      };
+      window.addEventListener('message', onMessage);
+      const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
+      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
+      document.body.appendChild(iframe);
+      const minimumDelay = needsBundleCompatibility ? 3000 : 600;
+      const script = '(' + captureStateWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + minimumDelay + ',' + JSON.stringify(path) + ',' + settings.maxActions + ');';
+      const probe = '<script>' + script + '<\/script>';
+      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+      timer = setTimeout(() => finish(reject, new Error('Không thể khám phá state HTML trong thời gian cho phép.')), settings.timeout);
+    });
+  }
+
+  function captureStateWhenStable(serialize, token, width, height, minimumDelay, path, maxActions) {
+    const waitForStable = () => new Promise(resolve => {
+      const started = Date.now();
+      let previous = '', stableTicks = 0;
+      const check = () => {
+        const signature = [document.readyState, document.querySelectorAll('*').length, (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 1000)].join('|');
+        if (signature === previous) stableTicks += 1;
+        else { previous = signature; stableTicks = 0; }
+        if (Date.now() - started >= minimumDelay && stableTicks >= 2) return resolve();
+        if (Date.now() - started >= 10000) return resolve();
+        setTimeout(check, 250);
+      };
+      setTimeout(check, 100);
+    });
+    const labelFor = element => (element.getAttribute('aria-label') || element.getAttribute('title') || element.getAttribute('data-action') || element.textContent || element.tagName).replace(/\s+/g, ' ').trim().slice(0, 60) || element.tagName;
+    const candidates = () => [...document.querySelectorAll('*')].filter(element => {
+      if (element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]')) return false;
+      if (element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
+      const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0) return false;
+      const tag = element.tagName.toLowerCase(), href = element.getAttribute('href');
+      if (tag === 'a' && href && !href.startsWith('#') && !href.startsWith('javascript:')) return false;
+      return ['button', 'summary', 'select', 'textarea'].includes(tag) || tag === 'a' || element.matches('[role="button"],[aria-haspopup],[aria-expanded],[onclick],[data-action],[data-state],[role="row"]') || style.cursor === 'pointer';
+    }).slice(0, maxActions);
+    const run = async () => {
+      await waitForStable();
+      for (const index of path) {
+        const target = candidates()[index];
+        if (!target) throw new Error('Không tìm thấy action ở path ' + path.join('.'));
+        target.click();
+        await waitForStable();
+      }
+      const actions = candidates().map((element, index) => ({ index, label: labelFor(element), tag: element.tagName.toLowerCase() }));
+      serialize(token, width, height, scene => parent.postMessage({ type: 'html-figma-state', token, path, scene, actions }, '*'));
+    };
+    run().catch(error => parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*'));
+  }
+
   function captureWhenStable(serialize, token, width, height, minimumDelay) {
     const started = Date.now();
     let previous = '';
@@ -141,7 +245,7 @@
     setTimeout(check, 100);
   }
 
-  function serializeScene(token, width, height) {
+  function serializeScene(token, width, height, emit) {
     try {
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
       const parseColor = value => {
@@ -289,27 +393,28 @@
         }
       }
 
-      parent.postMessage({
-        type: 'html-figma-scene',
-        token,
-        scene: { version: 1, viewport: { width, height }, nodes }
-      }, '*');
+      const scene = { version: 1, viewport: { width, height }, nodes };
+      if (emit) return emit(scene);
+      parent.postMessage({ type: 'html-figma-scene', token, scene }, '*');
     } catch (error) {
-      parent.postMessage({ type: 'html-figma-scene-error', token, message: error.message }, '*');
+      parent.postMessage({ type: emit ? 'html-figma-state-error' : 'html-figma-scene-error', token, message: error.message }, '*');
     }
   }
 
   global.captureSceneGraph = captureSceneGraph;
+  global.captureStateGraph = captureStateGraph;
 })(window);
 
 </script>
   <script>
 (function (global) {
-  global.pluginCode = function pluginCode(scene, pageName, title) {
+  global.pluginCode = function pluginCode(scene, pageName, title, graph) {
     const data = JSON.stringify(scene || null).replace(/</g, '\\u003c');
+    const graphData = JSON.stringify(graph || null).replace(/</g, '\\u003c');
     const requestedPageName = JSON.stringify(pageName || title || 'Imported HTML').replace(/</g, '\\u003c');
     const contentTitle = JSON.stringify(title || 'Imported HTML').replace(/</g, '\\u003c');
     return `const INITIAL_SCENE = ${data};
+const INITIAL_GRAPH = ${graphData};
 const DEFAULT_PAGE_NAME = ${requestedPageName};
 const CONTENT_TITLE = ${contentTitle};
 const solid = (color, opacity=1) => ({type:'SOLID', color, opacity});
@@ -376,14 +481,25 @@ async function renderScene(scene, title, pageName) {
   for (const item of positioned) item.parent.appendChild(item.node);
   return page.name;
 }
+async function renderGraph(graph, title, pageName) {
+  if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph HTML không hợp lệ.');
+  for (let index = 0; index < graph.states.length; index += 1) {
+    const state = graph.states[index];
+    await renderScene(state.scene, title + ' · ' + state.label, pageName + ' · ' + state.label);
+    figma.ui.postMessage({type:'state-progress', current:index + 1, total:graph.states.length, label:state.label});
+    await yieldToFigma();
+  }
+}
 figma.showUI(__html__, {width:720,height:620});
 figma.ui.onmessage = async message => {
   if (message.type !== 'import') return;
   try {
     const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
-    const pageName = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
+    const basePageName = message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME;
+    if (message.graph || INITIAL_GRAPH) await renderGraph(message.graph || INITIAL_GRAPH, title, basePageName);
+    else await renderScene(message.scene || INITIAL_SCENE, title, basePageName);
     figma.notify('Đã tạo design editable trong Figma.');
-    figma.ui.postMessage({type:'imported', title, pageName});
+    figma.ui.postMessage({type:'imported', title, pageName:basePageName});
     figma.closePlugin('Đã tạo design editable từ HTML.');
   } catch (error) {
     figma.notify('Không thể tạo design: ' + error.message, {error:true});
@@ -424,21 +540,23 @@ figma.ui.onmessage = async message => {
     }
     const fileBaseName = name => String(name || '').replace(/\.[^.]+$/, '').trim() || 'Imported HTML';
     function download() {
-      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(selected.scene, selected.pageName, spec.title)},{name:'scene.json',content:JSON.stringify(selected.scene,null,2)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+selected.pageName+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
+      const spec=selected.spec, files=[{name:'manifest.json',content:JSON.stringify({name:'HTML Visual Import',api:'1.0.0',main:'code.js',networkAccess:{allowedDomains:['none']},editorType:['figma']},null,2)},{name:'code.js',content:pluginCode(selected.scene, selected.pageName, spec.title, selected.graph)},{name:'scene.json',content:JSON.stringify(selected.scene,null,2)},{name:'spec.json',content:JSON.stringify(spec,null,2)},{name:'README.md',content:'# '+selected.pageName+'\\n\\nGenerated from standalone HTML. Import manifest.json in Figma Desktop.\\n'}];
+      if (selected.graph) files.push({name:'states.json',content:JSON.stringify(selected.graph,null,2)});
       const blob=new Blob([zip(files)],{type:'application/zip'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(selected.pageName||'html-design').replace(/[^\\p{L}\\p{N}]+/gu,'-').replace(/^-|-$/g,'').toLowerCase()+'-figma-plugin.zip';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Đã tạo plugin ZIP. Mở file zip và import manifest.json vào Figma.';
     }
     function importDirect() {
       if (!selected || !selected.scene) return;
-      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec, pageName: selected.pageName, scene: selected.scene } }, '*');
+      parent.postMessage({ pluginMessage: { type: 'import', spec: selected.spec, pageName: selected.pageName, scene: selected.scene, graph: selected.graph } }, '*');
       $('download').disabled = true;
       $('status').textContent = 'Đang tạo design editable trong Figma…';
     }
     async function show(file, html) {
-      const spec=extract(html), pageName=fileBaseName(file.name); selected={spec:{...spec,pageName},file,pageName,scene:null}; $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName; $('title').textContent=spec.title; $('stats').textContent='Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=true; $('status').textContent='Đang đọc và dựng layout '+file.name+'…';
-      try { selected.scene=await captureSceneGraph(html); $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; $('download').disabled=false; $('status').textContent='Đã dựng layout thật từ '+file.name; }
+      const spec=extract(html), pageName=fileBaseName(file.name), interactive=$('interactive').checked; selected={spec:{...spec,pageName},file,html,pageName,scene:null,graph:null}; $('summary').style.display='block'; $('page-name-field').hidden=false; $('page-name').value=pageName; $('title').textContent=spec.title; $('stats').textContent=interactive?'Đang khám phá state tương tác…':'Đang dựng layout HTML…'; $('chips').innerHTML=[...spec.headings,...spec.labels].slice(0,10).map(v=>'<span class="chip">'+v.replace(/[&<>]/g,'')+'</span>').join(''); $('download').disabled=true; $('status').textContent=(interactive?'Đang khám phá tương tác và dựng layout ':'Đang đọc và dựng layout ')+file.name+'…';
+      try { if (interactive) { selected.graph=await captureStateGraph(html); const layers=selected.graph.states.reduce((total,state)=>total+state.scene.nodes.length,0); $('stats').textContent=selected.graph.states.length+' states · '+layers+' layers'; } else { selected.scene=await captureSceneGraph(html); $('stats').textContent=spec.headings.length+' headings · '+spec.labels.length+' labels · '+selected.scene.nodes.length+' layers'; } $('download').disabled=false; $('status').textContent='Đã dựng '+(interactive?selected.graph.states.length+' state tương tác':'layout thật')+' từ '+file.name; }
       catch (error) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+error.message; }
     }
     $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)await show(file,await file.text());});
+    $('interactive').addEventListener('change',async()=>{if(selected?.html)await show(selected.file,selected.html);});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
     $('download').addEventListener('click', inFigma ? importDirect : download);
     if (inFigma) {
@@ -448,7 +566,9 @@ figma.ui.onmessage = async message => {
       window.onmessage = event => {
         const message = event.data.pluginMessage;
         if (!message) return;
-        $('status').textContent = message.type === 'progress'
+        $('status').textContent = message.type === 'state-progress'
+          ? `Đang tạo state ${message.current}/${message.total}…`
+          : message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'imported'
             ? `Đã tạo page “${message.pageName || message.title}” trong Figma.`

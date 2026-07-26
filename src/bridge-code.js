@@ -76,12 +76,24 @@ async function renderScene(scene, title, pageName) {
   return page.name;
 }
 
+async function renderGraph(graph, title, pageName) {
+  if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph HTML không hợp lệ.');
+  for (let index = 0; index < graph.states.length; index += 1) {
+    const state = graph.states[index];
+    await renderScene(state.scene, title + ' · ' + state.label, pageName + ' · ' + state.label);
+    figma.ui.postMessage({ type: 'state-progress', current: index + 1, total: graph.states.length, label: state.label });
+    await yieldToFigma();
+  }
+}
+
 figma.showUI(__html__, { width: 720, height: 620 });
 figma.ui.onmessage = async message => {
   if (message.type !== 'import') return;
   try {
     const title = message.spec?.title || 'Imported HTML';
-    const pageName = await renderScene(message.scene, title, message.pageName || message.spec?.pageName || title);
+    const pageName = message.pageName || message.spec?.pageName || title;
+    if (message.graph) await renderGraph(message.graph, title, pageName);
+    else await renderScene(message.scene, title, pageName);
     figma.notify('Đã tạo design editable trong Figma.');
     figma.ui.postMessage({ type: 'imported', title, pageName });
     figma.closePlugin('Đã tạo design editable từ HTML.');

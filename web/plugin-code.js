@@ -1,9 +1,11 @@
 (function (global) {
-  global.pluginCode = function pluginCode(scene, pageName, title) {
+  global.pluginCode = function pluginCode(scene, pageName, title, graph) {
     const data = JSON.stringify(scene || null).replace(/</g, '\\u003c');
+    const graphData = JSON.stringify(graph || null).replace(/</g, '\\u003c');
     const requestedPageName = JSON.stringify(pageName || title || 'Imported HTML').replace(/</g, '\\u003c');
     const contentTitle = JSON.stringify(title || 'Imported HTML').replace(/</g, '\\u003c');
     return `const INITIAL_SCENE = ${data};
+const INITIAL_GRAPH = ${graphData};
 const DEFAULT_PAGE_NAME = ${requestedPageName};
 const CONTENT_TITLE = ${contentTitle};
 const solid = (color, opacity=1) => ({type:'SOLID', color, opacity});
@@ -70,14 +72,25 @@ async function renderScene(scene, title, pageName) {
   for (const item of positioned) item.parent.appendChild(item.node);
   return page.name;
 }
+async function renderGraph(graph, title, pageName) {
+  if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph HTML không hợp lệ.');
+  for (let index = 0; index < graph.states.length; index += 1) {
+    const state = graph.states[index];
+    await renderScene(state.scene, title + ' · ' + state.label, pageName + ' · ' + state.label);
+    figma.ui.postMessage({type:'state-progress', current:index + 1, total:graph.states.length, label:state.label});
+    await yieldToFigma();
+  }
+}
 figma.showUI(__html__, {width:720,height:620});
 figma.ui.onmessage = async message => {
   if (message.type !== 'import') return;
   try {
     const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
-    const pageName = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
+    const basePageName = message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME;
+    if (message.graph || INITIAL_GRAPH) await renderGraph(message.graph || INITIAL_GRAPH, title, basePageName);
+    else await renderScene(message.scene || INITIAL_SCENE, title, basePageName);
     figma.notify('Đã tạo design editable trong Figma.');
-    figma.ui.postMessage({type:'imported', title, pageName});
+    figma.ui.postMessage({type:'imported', title, pageName:basePageName});
     figma.closePlugin('Đã tạo design editable từ HTML.');
   } catch (error) {
     figma.notify('Không thể tạo design: ' + error.message, {error:true});

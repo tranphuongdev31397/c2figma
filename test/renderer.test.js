@@ -46,3 +46,9 @@ test('uses a collision-safe page name and yields progress while rendering', () =
     assert.match(source, /setTimeout/);
   }
 });
+
+test('keeps a graph renderer available for opt-in interaction states', () => {
+  for (const file of renderers) {
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /renderGraph/);
+  }
+});

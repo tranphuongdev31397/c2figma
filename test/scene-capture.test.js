@@ -39,3 +39,11 @@ test('captures border widths per side instead of flattening them', () => {
   assert.match(source, /top: \{ width: number\(style\.borderTopWidth\)/);
   assert.match(source, /bottom: \{ width: number\(style\.borderBottomWidth\)/);
 });
+
+test('exposes an opt-in bounded state graph capture path', () => {
+  assert.match(source, /captureStateGraph/);
+  assert.match(source, /maxDepth/);
+  assert.match(source, /maxStates/);
+  assert.match(source, /\.click\(\)/);
+  assert.match(source, /actionPath/);
+});

@@ -44,6 +44,106 @@
     });
   }
 
+  function captureStateGraph(html, options = {}) {
+    const settings = { ...DEFAULTS, maxDepth: 2, maxStates: 8, maxActions: 8, ...options };
+    const queue = [{ path: [], labels: [] }];
+    const queued = new Set(['']);
+    const fingerprints = new Set();
+    const states = [];
+    const visit = async () => {
+      while (queue.length && states.length < settings.maxStates) {
+        const task = queue.shift();
+        let result;
+        try { result = await captureStatePath(html, task.path, settings); }
+        catch (error) { if (!states.length) throw error; continue; }
+        const fingerprint = JSON.stringify(result.scene.nodes.map(node => [node.kind, Math.round(node.x), Math.round(node.y), Math.round(node.width), Math.round(node.height), node.text, node.name, node.fill, node.stroke, node.opacity]));
+        if (fingerprints.has(fingerprint)) continue;
+        fingerprints.add(fingerprint);
+        states.push({ id: 'state-' + String(states.length + 1).padStart(2, '0'), label: task.labels.join(' → ') || 'Default', actionPath: task.path, scene: result.scene });
+        if (task.path.length >= settings.maxDepth) continue;
+        result.actions.slice(0, settings.maxActions).forEach(action => {
+          const path = [...task.path, action.index], key = path.join('.');
+          if (queued.has(key)) return;
+          queued.add(key);
+          queue.push({ path, labels: [...task.labels, action.label] });
+        });
+      }
+      return { version: 2, viewport: { width: settings.width, height: settings.height }, states };
+    };
+    return visit();
+  }
+
+  function captureStatePath(html, path, settings) {
+    return new Promise((resolve, reject) => {
+      const iframe = document.createElement('iframe');
+      const token = 'state-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      let timer;
+      let settled = false;
+      const finish = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        iframe.remove();
+        handler(value);
+      };
+      const onMessage = event => {
+        if (event.source !== iframe.contentWindow || !event.data || event.data.token !== token) return;
+        if (event.data.type === 'html-figma-state') finish(resolve, event.data);
+        if (event.data.type === 'html-figma-state-error') finish(reject, new Error(event.data.message));
+      };
+      window.addEventListener('message', onMessage);
+      const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
+      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
+      document.body.appendChild(iframe);
+      const minimumDelay = needsBundleCompatibility ? 3000 : 600;
+      const script = '(' + captureStateWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + minimumDelay + ',' + JSON.stringify(path) + ',' + settings.maxActions + ');';
+      const probe = '<script>' + script + '<\/script>';
+      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+      timer = setTimeout(() => finish(reject, new Error('Không thể khám phá state HTML trong thời gian cho phép.')), settings.timeout);
+    });
+  }
+
+  function captureStateWhenStable(serialize, token, width, height, minimumDelay, path, maxActions) {
+    const waitForStable = () => new Promise(resolve => {
+      const started = Date.now();
+      let previous = '', stableTicks = 0;
+      const check = () => {
+        const signature = [document.readyState, document.querySelectorAll('*').length, (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 1000)].join('|');
+        if (signature === previous) stableTicks += 1;
+        else { previous = signature; stableTicks = 0; }
+        if (Date.now() - started >= minimumDelay && stableTicks >= 2) return resolve();
+        if (Date.now() - started >= 10000) return resolve();
+        setTimeout(check, 250);
+      };
+      setTimeout(check, 100);
+    });
+    const labelFor = element => (element.getAttribute('aria-label') || element.getAttribute('title') || element.getAttribute('data-action') || element.textContent || element.tagName).replace(/\s+/g, ' ').trim().slice(0, 60) || element.tagName;
+    const candidates = () => [...document.querySelectorAll('*')].filter(element => {
+      if (element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]')) return false;
+      if (element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
+      const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0) return false;
+      const tag = element.tagName.toLowerCase(), href = element.getAttribute('href');
+      if (tag === 'a' && href && !href.startsWith('#') && !href.startsWith('javascript:')) return false;
+      return ['button', 'summary', 'select', 'textarea'].includes(tag) || tag === 'a' || element.matches('[role="button"],[aria-haspopup],[aria-expanded],[onclick],[data-action],[data-state],[role="row"]') || style.cursor === 'pointer';
+    }).slice(0, maxActions);
+    const run = async () => {
+      await waitForStable();
+      for (const index of path) {
+        const target = candidates()[index];
+        if (!target) throw new Error('Không tìm thấy action ở path ' + path.join('.'));
+        target.click();
+        await waitForStable();
+      }
+      const actions = candidates().map((element, index) => ({ index, label: labelFor(element), tag: element.tagName.toLowerCase() }));
+      serialize(token, width, height, scene => parent.postMessage({ type: 'html-figma-state', token, path, scene, actions }, '*'));
+    };
+    run().catch(error => parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*'));
+  }
+
   function captureWhenStable(serialize, token, width, height, minimumDelay) {
     const started = Date.now();
     let previous = '';
@@ -64,7 +164,7 @@
     setTimeout(check, 100);
   }
 
-  function serializeScene(token, width, height) {
+  function serializeScene(token, width, height, emit) {
     try {
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
       const parseColor = value => {
@@ -212,15 +312,14 @@
         }
       }
 
-      parent.postMessage({
-        type: 'html-figma-scene',
-        token,
-        scene: { version: 1, viewport: { width, height }, nodes }
-      }, '*');
+      const scene = { version: 1, viewport: { width, height }, nodes };
+      if (emit) return emit(scene);
+      parent.postMessage({ type: 'html-figma-scene', token, scene }, '*');
     } catch (error) {
-      parent.postMessage({ type: 'html-figma-scene-error', token, message: error.message }, '*');
+      parent.postMessage({ type: emit ? 'html-figma-state-error' : 'html-figma-scene-error', token, message: error.message }, '*');
     }
   }
 
   global.captureSceneGraph = captureSceneGraph;
+  global.captureStateGraph = captureStateGraph;
 })(window);

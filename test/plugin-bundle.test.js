@@ -14,6 +14,9 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.ui, /parent\.postMessage\(\{ pluginMessage:/);
   assert.match(bundle.ui, /button, \.button\s*\{/);
   assert.match(bundle.ui, /captureSceneGraph/);
+  assert.match(bundle.ui, /captureStateGraph/);
+  assert.match(bundle.ui, /id="interactive"/);
+  assert.match(bundle.ui, /message\.graph/);
   assert.match(bundle.ui, /function pluginCode/);
   assert.match(bundle.ui, /pluginCode\(selected\.scene, selected\.pageName/);
   assert.match(bundle.ui, /id="page-name"/);
@@ -29,6 +32,7 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
   assert.match(bundle.code, /message\.scene/);
   assert.match(bundle.code, /uniquePageName/);
   assert.match(bundle.code, /message\.pageName/);
+  assert.match(bundle.code, /renderGraph/);
   assert.match(bundle.code, /type:\s*['"]progress/);
   assert.match(bundle.code, /setTimeout/);
   assert.doesNotMatch(bundle.code, /Generated visual scaffold/);
