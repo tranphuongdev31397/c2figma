@@ -3,6 +3,8 @@
     { "source": "/", "destination": "/web/index.html" },
     { "source": "/guide", "destination": "/web/guide.html" },
     { "source": "/guide/", "destination": "/web/guide.html" },
+    { "source": "/scene-capture.js", "destination": "/web/scene-capture.js" },
+    { "source": "/plugin-code.js", "destination": "/web/plugin-code.js" },
     { "source": "/downloads/:path*", "destination": "/web/downloads/:path*" }
   ]
 }
