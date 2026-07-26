@@ -66,3 +66,8 @@ test('filters external navigation schemes while allowing hash links', () => {
   assert.match(source, /test\(element\.href\)/);
   assert.doesNotMatch(source, /href.*#.*external/);
 });
+
+test('preserves same-document hash links before resolving the URL', () => {
+  assert.match(source, /const href = element\.getAttribute\('href'\) \|\| ''/);
+  assert.match(source, /!href\.startsWith\('#'\)/);
+});

@@ -253,7 +253,8 @@
         if (seen.has(element) || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
         const role = (element.getAttribute('role') || '').toLowerCase();
         if (element.getAttribute('aria-hidden') === 'true' || role === 'presentation' || role === 'none') return false;
-        if (element.tagName === 'A' && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
+        const href = element.getAttribute('href') || '';
+        if (element.tagName === 'A' && !href.startsWith('#') && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
         seen.add(element);
         return true;
       }).map((element, index) => {
