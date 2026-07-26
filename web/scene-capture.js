@@ -286,6 +286,24 @@
       };
       check();
     });
+    // ponytail: the platform already tracks in-flight transitions; polling opacity would reinvent it badly.
+    const waitForAnimations = async () => {
+      if (!document.getAnimations) return;
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        const running = document.getAnimations().filter(animation => animation.playState === 'running');
+        if (!running.length) return;
+        await Promise.race([
+          Promise.all(running.map(animation => animation.finished.catch(() => {}))),
+          sleep(250)
+        ]);
+      }
+    };
+    const settleAfterAction = async () => {
+      await sleep(settleMs);
+      await waitForAnimations();
+      await sleep(settleMs);
+    };
     (async () => {
       try {
         await waitForStable();
@@ -294,7 +312,7 @@
           const candidate = candidates.find(item => item.key === actionPath[depth]);
           if (!candidate) throw new Error('Không tìm thấy hành động ' + actionPath[depth]);
           candidate.element.click();
-          await sleep(settleMs);
+          await settleAfterAction();
         }
         const candidates = discover();
         const scene = serialize('', width, height);
@@ -305,22 +323,25 @@
     })();
   }
 
+  // ponytail: no opacity and whole-pixel bounds on purpose. A modal caught mid-fade differs from the
+  // same modal at rest only in those two, so keeping them splits one state into a state per frame.
   function sceneFingerprint(scene) {
     return JSON.stringify(scene.nodes.map(node => ({
       kind: node.kind,
-      bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value * 10) / 10),
+      bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value)),
       text: node.text || '',
       fill: node.fill,
       stroke: node.stroke,
-      opacity: node.opacity,
       visibility: node.visibility !== false
     })));
   }
 
+  const LIMITS = { maxDepth: 2, maxStates: 24, maxActionsPerState: 8 };
+
   function captureStateGraph(html, options = {}, onState) {
     const profile = settleProfileFor(html);
     const settings = {
-      width: 1440, height: 900, maxDepth: 2, maxStates: 8, maxActionsPerState: 8,
+      width: 1440, height: 900, ...LIMITS,
       stateTimeoutMs: profile.timeoutMs, settleMs: 80, ...options
     };
     const runPath = actionPath => new Promise((resolve, reject) => {
@@ -395,4 +416,6 @@
   global.captureSceneGraph = captureSceneGraph;
   global.captureStateGraph = captureStateGraph;
   global.settleProfileFor = settleProfileFor;
+  global.sceneFingerprintFor = sceneFingerprint;
+  global.explorationLimits = LIMITS;
 })(window);

@@ -17,15 +17,18 @@ const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 const TITLE = ${title};
 const post = payload => { try { figma.ui.postMessage(payload); } catch (error) {} };
 const triggers = new Set(['ON_CLICK','ON_HOVER','ON_PRESS','ON_DRAG','ON_KEY_DOWN','ON_KEY_UP','AFTER_TIMEOUT','MOUSE_ENTER','MOUSE_LEAVE']);
-async function renderScene(scene, title, pageName) {
-  const page=figma.createPage(); page.name=uniquePageName(pageName || title); await figma.setCurrentPageAsync(page);
-  const root=figma.createFrame(); root.name='Screen / '+title; root.resize(scene.viewport.width,scene.viewport.height); root.layoutMode='NONE'; root.fills=[{type:'SOLID',color:{r:1,g:1,b:1}}]; page.appendChild(root);
+const STATE_GAP = 160;
+async function renderScene(scene, title, pageName, target) {
+  let page = target && target.page;
+  if (!page) { page=figma.createPage(); page.name=uniquePageName(pageName || title); await figma.setCurrentPageAsync(page); if (target) target.page=page; }
+  const root=figma.createFrame(); root.name='Screen / '+title; root.x=target?target.offsetX || 0:0; root.y=0; root.resize(scene.viewport.width,scene.viewport.height); root.layoutMode='NONE'; root.fills=[{type:'SOLID',color:{r:1,g:1,b:1}}]; page.appendChild(root);
   const nodes=new Map([['__root__',root]]), bounds=new Map([['__root__',{x:0,y:0}]]), actionNodes=new Map(), positioned=[];
   for (let index=0; index<scene.nodes.length; index+=1) { const item=scene.nodes[index], parent=nodes.get(item.parentId)||root, pb=bounds.get(item.parentId)||bounds.get('__root__'), node=item.kind==='text'?figma.createText():item.kind==='svg'?figma.createNodeFromSvg(item.svg):figma.createFrame(); node.name=item.name||item.kind; node.x=item.x-pb.x; node.y=item.y-pb.y; node.resize(Math.max(1,item.width),Math.max(1,item.height)); node.opacity=item.opacity ?? 1;
     if(item.kind==='text'){const fs=style(item.fontWeight);await figma.loadFontAsync({family:'Inter',style:fs});node.fontName={family:'Inter',style:fs};node.characters=item.text||'';node.fontSize=item.fontSize||14;node.fills=[solid(item.color||{r:.1,g:.1,b:.1})];node.textAutoResize='WIDTH_AND_HEIGHT';}
     else if(item.kind!=='svg'){node.layoutMode='NONE';node.clipsContent=['hidden','clip','auto','scroll'].includes(item.overflow);node.fills=item.fill?[solid(item.fill)]:[];const b=item.borders,w=b?{top:b.top.width,right:b.right.width,bottom:b.bottom.width,left:b.left.width}:{top:item.strokeWidth,right:item.strokeWidth,bottom:item.strokeWidth,left:item.strokeWidth},p=b?[b.top,b.right,b.bottom,b.left].find(s=>s.width)?.color:item.stroke;if(p&&Math.max(w.top,w.right,w.bottom,w.left)){node.strokes=[solid(p)];node.strokeWeight=Math.max(w.top,w.right,w.bottom,w.left);node.strokeTopWeight=w.top;node.strokeRightWeight=w.right;node.strokeBottomWeight=w.bottom;node.strokeLeftWeight=w.left;}if(item.radius)node.cornerRadius=item.radius;}
     parent.appendChild(node);if(item.position==='absolute'||item.position==='fixed'||item.position==='sticky')positioned.push({parent,node});if(item.actionKey)actionNodes.set(item.actionKey,node);nodes.set(item.id,node);bounds.set(item.id,{x:item.x,y:item.y}); if((index+1)%24===0||index+1===scene.nodes.length){await yieldToFigma();} }
   for (const item of positioned) item.parent.appendChild(item.node);
+  if (target) target.offsetX = root.x + Math.max(1,scene.viewport.width) + STATE_GAP;
   return {root, actionNodes};
 }
 async function applyTransitions(graph, rendered) {
@@ -40,11 +43,13 @@ async function applyTransitions(graph, rendered) {
   return skipped;
 }
 async function renderGraph(graph) {
-  const rendered=new Map();
+  const rendered=new Map(), target={page:null, offsetX:0};
   for (let index=0; index<graph.states.length; index+=1) {
     const state=graph.states[index];
     if(!state?.id || rendered.has(state.id)) continue;
-    rendered.set(state.id, await renderScene(state.scene, state.label || TITLE, (PAGE_NAME || TITLE)+' · '+(state.label || state.id)));
+    const scene=await renderScene(state.scene, state.label || TITLE, PAGE_NAME || TITLE, target);
+    scene.root.name='State / '+(state.label || state.id);
+    rendered.set(state.id, scene);
     post({type:'state-progress', current:index+1, total:graph.states.length, title:TITLE});
   }
   await applyTransitions(graph, rendered);

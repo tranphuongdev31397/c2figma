@@ -83,11 +83,12 @@ const graphFixture = () => {
   };
 };
 
-const fakeFigma = reactions => {
+const fakeFigma = (reactions, { uiVisible = true } = {}) => {
   let ids = 0;
   const node = () => ({
     id: 'node-' + (ids += 1),
-    appendChild() {},
+    children: [],
+    appendChild(child) { this.children.push(child); },
     resize() {},
     setReactionsAsync(value) { reactions.push({ id: this.id, value }); return Promise.resolve(); }
   });
@@ -105,7 +106,10 @@ const fakeFigma = reactions => {
       showUI() {},
       notify() {},
       closePlugin(message) { closed.push(message); },
-      ui: { postMessage() { throw new Error('no visible UI'); }, onmessage: null }
+      ui: {
+        postMessage() { if (!uiVisible) throw new Error('no visible UI'); },
+        onmessage: null
+      }
     }
   };
 };
@@ -122,18 +126,44 @@ test('generated plugins render every state and link prototype reactions', async 
 
   for (const generate of generators) {
     const reactions = [];
-    const { figma, closed } = fakeFigma(reactions);
+    // the generated ZIP plugin ships no ui.html, so its UI messages must not reach a visible UI
+    const { figma, closed } = fakeFigma(reactions, { uiVisible: false });
     vm.runInNewContext(generate(), { figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, JSON, Error, String });
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    assert.equal(figma.root.children.length, 2);
-    assert.deepEqual(figma.root.children.map(page => page.name), ['Employees · Default', 'Employees · Opened']);
+    const [page] = figma.root.children;
+    assert.equal(figma.root.children.length, 1, 'every state belongs on one page');
+    assert.equal(page.name, 'Employees');
+    assert.equal(page.children.length, 2, 'one root frame per state');
+    assert.ok(page.children[1].x >= page.children[0].x + 100, 'state frames must not overlap');
     assert.equal(reactions.length, 1);
     assert.equal(reactions[0].value[0].trigger.type, 'ON_CLICK');
     assert.equal(reactions[0].value[0].actions[0].transition.type, 'DISSOLVE');
     assert.ok(reactions[0].value[0].actions[0].destinationId);
     assert.deepEqual(closed, ['Đã tạo design editable từ HTML.']);
   }
+});
+
+test('the streamed renderer lays every state out on one page', async () => {
+  const reactions = [];
+  const { figma } = fakeFigma(reactions);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8'), {
+    figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, JSON, Error, String
+  });
+
+  const graph = graphFixture();
+  figma.ui.onmessage({ type: 'import-start', spec: { title: 'T' }, pageName: 'Employees' });
+  for (const state of graph.states) figma.ui.onmessage({ type: 'import-state', state });
+  figma.ui.onmessage({ type: 'import-finish', graph });
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  const [page] = figma.root.children;
+  assert.equal(figma.root.children.length, 1);
+  assert.equal(page.name, 'Employees');
+  assert.equal(page.children.length, 2);
+  assert.ok(page.children[1].x >= page.children[0].x + 100);
+  assert.equal(reactions.length, 1);
+  assert.ok(reactions[0].value[0].actions[0].destinationId);
 });
 
 test('waits for an in-flight render before starting a replacement session', async () => {

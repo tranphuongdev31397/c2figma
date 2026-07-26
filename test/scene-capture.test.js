@@ -25,6 +25,45 @@ test('gives a bundled page the same settle budget on both capture paths', () => 
   assert.ok(plain.timeoutMs > plain.minimumDelay);
 });
 
+test('waits for running animations to finish before capturing a state', () => {
+  // ponytail: a fixed sleep captures a modal mid-fade, which both blurs the layer and
+  // makes every replay of the same action fingerprint differently.
+  assert.match(source, /getAnimations/);
+  assert.match(source, /playState/);
+  assert.doesNotMatch(source, /click\(\);\s*await sleep\(settleMs\);\s*\}/);
+});
+
+test('fingerprints a state by its structure, not by its animation frame', () => {
+  const { sceneFingerprintFor } = load();
+  const node = opacity => ({
+    kind: 'frame', name: 'Modal', x: 10.4, y: 20.6, width: 100.2, height: 50,
+    text: 'Thêm nhân viên mới', fill: { r: 1, g: 1, b: 1, a: 1 }, opacity
+  });
+
+  assert.equal(
+    sceneFingerprintFor({ nodes: [node(0.4)] }),
+    sceneFingerprintFor({ nodes: [node(1)] }),
+    'the same modal caught mid-fade and fully open is one state'
+  );
+  assert.notEqual(
+    sceneFingerprintFor({ nodes: [node(1)] }),
+    sceneFingerprintFor({ nodes: [{ ...node(1), text: 'Sửa nhân viên' }] }),
+    'different content is still a different state'
+  );
+});
+
+test('leaves room for a second level of exploration', () => {
+  const { explorationLimits } = load();
+
+  // ponytail: one screen easily offers maxActionsPerState candidates, so a state budget equal to that
+  // is spent entirely at depth 1 and the second click never happens.
+  assert.ok(
+    explorationLimits.maxStates > explorationLimits.maxActionsPerState,
+    'depth 1 alone can fill the state budget'
+  );
+  assert.ok(explorationLimits.maxDepth >= 2);
+});
+
 test('the interactive path waits for the same profile as the static path', () => {
   assert.match(source, /settleProfileFor\(html\)/);
   assert.match(source, /minimumDelay/);

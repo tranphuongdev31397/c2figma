@@ -59,7 +59,7 @@
         <div><strong>Kéo thả file HTML vào đây</strong><span>hoặc bấm để chọn file từ máy</span></div>
       </label>
       <input id="file" type="file" accept=".html,.htm,text/html">
-      <label class="interactive"><input id="interactive" type="checkbox"> Khám phá các state tương tác (tối đa 8)</label>
+      <label class="interactive"><input id="interactive" type="checkbox"> Khám phá các state tương tác <span id="state-limit"></span></label>
       <div id="summary">
         <div class="summary-head"><strong id="title">—</strong><span id="stats">—</span></div>
         <div class="page-name" id="page-name-field" hidden><label for="page-name">Tên page Figma</label><input id="page-name" type="text" maxlength="120" autocomplete="off"></div>
@@ -142,7 +142,7 @@
         selected.scene ||= state.scene;
         const layers=graph.states.reduce((total,item)=>total+item.scene.nodes.length,0);
         $('stats').textContent=graph.states.length+' state · '+layers+' layers';
-        $('status').textContent='Đang khám phá '+graph.states.length+'/8 state'+(selected.directStarted?' và gửi sang Figma…':'…');
+        $('status').textContent='Đang khám phá '+graph.states.length+'/'+explorationLimits.maxStates+' state'+(selected.directStarted?' và gửi sang Figma…':'…');
         if (selected.directStarted) postToFigma({type:'import-state',state});
       };
       try {
@@ -160,6 +160,7 @@
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; }
       }
     }
+    $('state-limit').textContent='(tối đa '+explorationLimits.maxStates+')';
     $('file').addEventListener('change',async e=>{const file=e.target.files[0];if(file)await show(file,await file.text());});
     $('page-name').addEventListener('input', e=>{if(!selected)return;selected.pageName=e.target.value.trim()||fileBaseName(selected.file.name);selected.spec.pageName=selected.pageName;});
     $('download').addEventListener('click', inFigma ? importDirect : download);

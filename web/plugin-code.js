@@ -13,12 +13,15 @@ const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold'
 const uniquePageName = base => { const wanted=String(base || 'Imported HTML').trim() || 'Imported HTML', names=new Set(figma.root.children.map(page=>page.name)); if(!names.has(wanted)) return wanted; let index=2; while(names.has(wanted+' '+index)) index += 1; return wanted+' '+index; };
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 const post = payload => { try { figma.ui.postMessage(payload); } catch (error) {} };
-async function renderScene(scene, title, pageName) {
+const STATE_GAP = 160;
+async function renderScene(scene, title, pageName, target) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
-  const page = figma.createPage();
-  page.name = uniquePageName(pageName || title);
+  let page = target && target.page;
+  if (!page) { page = figma.createPage(); page.name = uniquePageName(pageName || title); if (target) target.page = page; }
   const root = figma.createFrame();
   root.name = 'Screen / ' + title;
+  root.x = target ? target.offsetX || 0 : 0;
+  root.y = 0;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
   root.layoutMode = 'NONE';
   root.fills = [];
@@ -71,6 +74,7 @@ async function renderScene(scene, title, pageName) {
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) { post({type:'progress', current:index + 1, total:scene.nodes.length, title}); await yieldToFigma(); }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
+  if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
   return {page, root, actionNodes, pageName:page.name};
 }
 const transitionTriggers = new Set(['ON_CLICK','ON_HOVER','ON_PRESS','ON_DRAG','ON_KEY_DOWN','ON_KEY_UP','AFTER_TIMEOUT','MOUSE_ENTER','MOUSE_LEAVE']);
@@ -92,10 +96,13 @@ async function applyTransitions(graph, renderedStates) {
 async function renderGraph(graph, title, basePageName) {
   if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph không hợp lệ.');
   const rendered = new Map();
+  const target = {page:null, offsetX:0};
   for (let index = 0; index < graph.states.length; index += 1) {
     const state = graph.states[index];
     if (!state?.id || rendered.has(state.id)) continue;
-    rendered.set(state.id, await renderScene(state.scene, state.label || title, basePageName + ' · ' + (state.label || state.id)));
+    const scene = await renderScene(state.scene, state.label || title, basePageName, target);
+    scene.root.name = 'State / ' + (state.label || state.id);
+    rendered.set(state.id, scene);
     post({type:'state-progress', current:index + 1, total:graph.states.length, title});
   }
   await applyTransitions(graph, rendered);
