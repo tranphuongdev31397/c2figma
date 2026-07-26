@@ -78,10 +78,20 @@
   </main>
   <script>
 (function (global) {
-  const DEFAULTS = { width: 1440, height: 900, timeout: 15000 };
+  const DEFAULTS = { width: 1440, height: 900 };
+
+  // ponytail: Claude bundles hydrate from internal blob resources, so every capture of one has to
+  // outwait that. Both paths read the same profile — an interactive capture that settles faster than
+  // the static one just times out before the page exists.
+  function settleProfileFor(html) {
+    const bundled = /__bundler\/(?:manifest|template|page_order)/.test(html);
+    const minimumDelay = bundled ? 3000 : 600;
+    return { bundled, minimumDelay, timeoutMs: minimumDelay + 12000 };
+  }
 
   function captureSceneGraph(html, options = {}) {
-    const settings = { ...DEFAULTS, ...options };
+    const profile = settleProfileFor(html);
+    const settings = { ...DEFAULTS, timeout: profile.timeoutMs, ...options };
     return new Promise((resolve, reject) => {
       const iframe = document.createElement('iframe');
       const token = 'scene-' + Date.now() + '-' + Math.random().toString(36).slice(2);
@@ -106,8 +116,7 @@
       window.addEventListener('message', onMessage);
       // ponytail: Claude bundles need same-origin to hydrate their internal blob resources;
       // keep the broader sandbox for ordinary HTML instead of weakening every upload.
-      const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
-      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('sandbox', profile.bundled ? 'allow-scripts allow-same-origin' : 'allow-scripts');
       iframe.setAttribute('aria-hidden', 'true');
       iframe.style.cssText = [
         'position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px',
@@ -115,8 +124,7 @@
       ].join(';');
       document.body.appendChild(iframe);
 
-      const minimumDelay = needsBundleCompatibility ? 3000 : 600;
-      const script = '(' + captureWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + minimumDelay + ');';
+      const script = '(' + captureWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + profile.minimumDelay + ');';
       const probe = '<script>' + script + '<\/script>';
       iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
       timer = setTimeout(() => finish(reject, new Error('Không thể dựng layout HTML trong thời gian cho phép.')), settings.timeout);
@@ -317,7 +325,7 @@
     return `action-${slug}-${String(occurrence).padStart(2, '0')}`;
   }
 
-  function captureInteractivePath(actionKeyFor, serialize, token, width, height, settleMs, actionPath) {
+  function captureInteractivePath(actionKeyFor, serialize, token, width, height, settleMs, actionPath, minimumDelay) {
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const visible = element => {
       const style = getComputedStyle(element);
@@ -343,13 +351,16 @@
       });
     };
     const waitForStable = () => new Promise(resolve => {
+      const started = Date.now();
       let previous = '';
       let stableTicks = 0;
       const check = () => {
         const signature = [document.readyState, document.querySelectorAll('*').length, document.body ? document.body.innerText : ''].join('|');
         if (signature === previous) stableTicks += 1;
         else { previous = signature; stableTicks = 0; }
-        if (stableTicks >= 2) return resolve();
+        const waited = Date.now() - started;
+        if (waited >= minimumDelay && stableTicks >= 2) return resolve();
+        if (waited >= minimumDelay + 10000) return resolve();
         setTimeout(check, 40);
       };
       check();
@@ -386,11 +397,11 @@
   }
 
   function captureStateGraph(html, options = {}, onState) {
+    const profile = settleProfileFor(html);
     const settings = {
       width: 1440, height: 900, maxDepth: 2, maxStates: 8, maxActionsPerState: 8,
-      stateTimeoutMs: 1500, settleMs: 80, ...options
+      stateTimeoutMs: profile.timeoutMs, settleMs: 80, ...options
     };
-    const needsBundleCompatibility = /__bundler\/(?:manifest|template|page_order)/.test(html);
     const runPath = actionPath => new Promise((resolve, reject) => {
       const iframe = document.createElement('iframe');
       const token = 'state-' + Date.now() + '-' + Math.random().toString(36).slice(2);
@@ -407,11 +418,11 @@
         if (event.data.type === 'html-figma-state-error') finish(reject, new Error(event.data.message));
       };
       window.addEventListener('message', onMessage);
-      iframe.setAttribute('sandbox', needsBundleCompatibility ? 'allow-scripts allow-same-origin' : 'allow-scripts');
+      iframe.setAttribute('sandbox', profile.bundled ? 'allow-scripts allow-same-origin' : 'allow-scripts');
       iframe.setAttribute('aria-hidden', 'true');
       iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
       document.body.appendChild(iframe);
-      const script = '(' + captureInteractivePath.toString() + ')((' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + JSON.stringify(actionPath) + ');';
+      const script = '(' + captureInteractivePath.toString() + ')((' + actionKeyFor.toString() + '),(' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + settings.settleMs + ',' + JSON.stringify(actionPath) + ',' + profile.minimumDelay + ');';
       const probe = '<script>' + script + '<\/script>';
       iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
       timer = setTimeout(() => finish(reject, new Error('State capture timed out.')), settings.stateTimeoutMs);
@@ -462,6 +473,7 @@
 
   global.captureSceneGraph = captureSceneGraph;
   global.captureStateGraph = captureStateGraph;
+  global.settleProfileFor = settleProfileFor;
 })(window);
 
 </script>
@@ -679,7 +691,7 @@ setTimeout(boot, 0);`;
         if (selected.directStarted) postToFigma({type:'import-finish',graph});
       } catch (error) {
         if (selected.file !== file) return;
-        $('status').textContent='Không khám phá được state; dùng layout cơ bản.';
+        $('status').textContent='Không khám phá được state ('+error.message+'); dùng layout cơ bản.';
         if (selected.directStarted) postToFigma({type:'import-error',message:error.message});
         try { selected.graph=null; selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('download').disabled=false; }
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; }

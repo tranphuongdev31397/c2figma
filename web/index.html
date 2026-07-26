@@ -154,7 +154,7 @@
         if (selected.directStarted) postToFigma({type:'import-finish',graph});
       } catch (error) {
         if (selected.file !== file) return;
-        $('status').textContent='Không khám phá được state; dùng layout cơ bản.';
+        $('status').textContent='Không khám phá được state ('+error.message+'); dùng layout cơ bản.';
         if (selected.directStarted) postToFigma({type:'import-error',message:error.message});
         try { selected.graph=null; selected.scene=await captureSceneGraph(html); selected.captureDone=true; $('download').disabled=false; }
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; }
