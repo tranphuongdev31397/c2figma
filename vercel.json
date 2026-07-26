@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/", "destination": "/web/index.html" },
     { "source": "/guide", "destination": "/web/guide.html" },
-    { "source": "/guide/", "destination": "/web/guide.html" }
+    { "source": "/guide/", "destination": "/web/guide.html" },
+    { "source": "/downloads/:path*", "destination": "/web/downloads/:path*" }
   ]
 }
