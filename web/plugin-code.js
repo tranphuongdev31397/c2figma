@@ -18,6 +18,7 @@ async function renderScene(scene, title) {
   page.appendChild(root);
   const byId = new Map([['__root__', root]]);
   const bounds = new Map([['__root__', {x:0,y:0}]]);
+  const positioned = [];
   for (const item of scene.nodes) {
     const parent = byId.get(item.parentId) || root;
     const parentBounds = bounds.get(item.parentId) || bounds.get('__root__');
@@ -45,9 +46,11 @@ async function renderScene(scene, title) {
       if (item.radius) node.cornerRadius = item.radius;
     }
     parent.appendChild(node);
+    if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({parent,node});
     byId.set(item.id, node);
     bounds.set(item.id, {x:item.x, y:item.y});
   }
+  for (const item of positioned) item.parent.appendChild(item.node);
   await figma.setCurrentPageAsync(page);
   figma.closePlugin('Đã tạo design editable từ HTML.');
 }

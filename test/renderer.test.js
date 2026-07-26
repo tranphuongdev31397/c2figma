@@ -19,3 +19,9 @@ test('renders captured SVG layers through Figma SVG import', () => {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /createNodeFromSvg/);
   }
 });
+
+test('raises positioned layers above normal siblings', () => {
+  for (const file of renderers) {
+    assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /item\.position\s*===\s*'absolute'/);
+  }
+});

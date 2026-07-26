@@ -133,6 +133,7 @@
           stroke: border.width ? parseColor(border.color) : null,
           strokeWidth: border.width,
           radius,
+          position: style.position,
           opacity: Number(style.opacity) || 1,
           text: '',
           fontSize: number(style.fontSize),

@@ -20,3 +20,7 @@ test('captures native control text and SVG artwork as real scene layers', () => 
 test('recognizes SVG roots regardless of HTML tag-name casing', () => {
   assert.match(source, /element\.tagName\.toLowerCase\(\) === 'svg'/);
 });
+
+test('preserves positioned layers for renderer stacking', () => {
+  assert.match(source, /position: style\.position/);
+});
