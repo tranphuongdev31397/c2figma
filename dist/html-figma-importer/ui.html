@@ -107,6 +107,11 @@
 (function (global) {
   const DEFAULTS = { width: 1440, height: 900 };
 
+  function withProbeFor(html, script) {
+    const probe = '<script>' + script + '<\/script>';
+    return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+  }
+
   // ponytail: Claude bundles hydrate from internal blob resources, so every capture of one has to
   // outwait that. Both paths read the same profile — an interactive capture that settles faster than
   // the static one just times out before the page exists.
@@ -152,8 +157,7 @@
       document.body.appendChild(iframe);
 
       const script = '(' + captureWhenStable.toString() + ')((' + serializeScene.toString() + '),' + JSON.stringify(token) + ',' + settings.width + ',' + settings.height + ',' + profile.minimumDelay + ');';
-      const probe = '<script>' + script + '<\/script>';
-      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
+      iframe.srcdoc = withProbeFor(html, script);
       timer = setTimeout(() => finish(reject, new Error('Không thể dựng layout HTML trong thời gian cho phép.')), settings.timeout);
     });
   }
@@ -185,6 +189,16 @@
 
   function serializeScene(token, width, height) {
     try {
+      // Out-waiting a fade is a race the capture keeps losing: a dialog remounts on its own schedule,
+      // and for its first frames its own opacity is 0 while its children are already opaque — so what
+      // the probe reads is half a dialog. These are Web Animations, which no injected stylesheet can
+      // reach, so end them here instead: every animation jumps to its final frame, which is the state
+      // a design file wants. An endless one refuses to finish and is left running.
+      if (document.getAnimations) {
+        for (const animation of document.getAnimations()) {
+          try { animation.finish(); } catch (error) { /* infinite effect — nothing to land on */ }
+        }
+      }
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
       const parseColor = value => {
         if (!value || value === 'transparent') return null;
@@ -567,10 +581,7 @@
       iframe.style.cssText = ['position:fixed', 'left:-10000px', 'top:0', 'width:' + settings.width + 'px', 'height:' + settings.height + 'px', 'border:0', 'opacity:0', 'pointer-events:none'].join(';');
       return iframe;
     };
-    const inject = (iframe, script) => {
-      const probe = '<script>' + script + '<\/script>';
-      iframe.srcdoc = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, probe + '</body>') : html + probe;
-    };
+    const inject = (iframe, script) => { iframe.srcdoc = withProbeFor(html, script); };
     const newToken = prefix => prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2);
 
     const runPath = actionPath => new Promise((resolve, reject) => {
@@ -725,6 +736,7 @@
   }
 
   global.captureSceneGraph = captureSceneGraph;
+  global.withProbeFor = withProbeFor;
   global.captureStateGraph = captureStateGraph;
   global.settleProfileFor = settleProfileFor;
   global.sceneFingerprintFor = sceneFingerprint;

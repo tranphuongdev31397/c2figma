@@ -55,7 +55,7 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
 // child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
 // backdrop: the dialog's white sheet vanished and the page showed through its body.
-const fakeDocument = elements => {
+const fakeDocument = (elements, animations = []) => {
   const styles = new Map();
   const rects = new Map();
   for (const element of elements) {
@@ -64,7 +64,9 @@ const fakeDocument = elements => {
     element.closest = () => null;
     element.id = element.attributes?.id || '';
     styles.set(element, {
-      display: 'block', visibility: 'visible', opacity: String(element.opacity ?? 1),
+      display: 'block', visibility: 'visible',
+      // read late: an animation that lands changes it between getAnimations() and the style read
+      get opacity() { return String(element.opacity ?? 1); },
       position: element.position || 'static', zIndex: 'auto', overflow: 'visible',
       backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(0, 0, 0)', fontSize: '14px', fontWeight: '400',
       borderTopWidth: '0px', borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
@@ -76,13 +78,14 @@ const fakeDocument = elements => {
   }
   return {
     querySelectorAll: () => elements,
+    getAnimations: () => animations,
     getComputedStyle: element => styles.get(element)
   };
 };
 
-const runSerialize = elements => {
+const runSerialize = (elements, animations) => {
   const body = source.match(/\n {2}function serializeScene\([\s\S]*?\n {2}\}\n/)[0];
-  const dom = fakeDocument(elements);
+  const dom = fakeDocument(elements, animations);
   const scope = {
     document: dom,
     getComputedStyle: dom.getComputedStyle,
@@ -111,6 +114,23 @@ test('re-checks for animations that only start after the first look', () => {
   // serialize straight into the next fade.
   assert.match(source, /calm/);
   assert.doesNotMatch(source, /await sleep\(settleMs\);\s*await waitForAnimations\(\);\s*await sleep\(settleMs\);\s*\}/);
+});
+
+test('ends every running animation before reading the page', () => {
+  // Out-waiting a fade is a race the capture keeps losing. These are Web Animations, so no injected
+  // stylesheet reaches them — the probe has to end them itself.
+  const overlay = { tagName: 'DIV', attributes: { class: 'role-modal-overlay' }, parentElement: null, position: 'fixed' };
+  const sheet = { tagName: 'DIV', attributes: { class: 'role-modal' }, parentElement: overlay, opacity: 0 };
+  const finished = [];
+  const animations = [
+    { name: 'fade', finish() { finished.push('fade'); sheet.opacity = 1; } },
+    { name: 'spinner', finish() { finished.push('spinner'); throw new Error('Cannot finish Animation with an infinite target effect'); } }
+  ];
+
+  const names = runSerialize([overlay, sheet], animations).nodes.map(node => node.name);
+
+  assert.deepEqual(finished, ['fade', 'spinner'], 'every animation is asked to land');
+  assert.ok(names.some(name => /role-modal ·/.test(name)), 'the dialog that finished its fade is captured whole');
 });
 
 test('caps how long one action may wait to settle', () => {
