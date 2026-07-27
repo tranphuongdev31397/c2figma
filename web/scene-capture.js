@@ -362,7 +362,11 @@
       try {
         await tools.waitForStable();
         await tools.replay(actionPath);
-        parent.postMessage({ type: 'html-figma-state', token, scene: serialize('', width, height), actions: tools.listActions() }, '*');
+        // Discovery is what stamps the action keys onto the elements, so it has to run against this
+        // state before the scene is read — otherwise the scene carries the previous state's tags, or
+        // on the baseline none at all, and every link out of it has no layer to start from.
+        const actions = tools.listActions();
+        parent.postMessage({ type: 'html-figma-state', token, scene: serialize('', width, height), actions }, '*');
       } catch (error) {
         parent.postMessage({ type: 'html-figma-state-error', token, message: error.message }, '*');
       }
@@ -418,9 +422,10 @@
       try {
         const clean = await resetToBaseline();
         await tools.replay(data.actionPath);
+        const actions = tools.listActions();
         parent.postMessage({
           type: 'html-figma-state', token, requestId: data.requestId,
-          scene: serialize('', width, height), actions: tools.listActions(), degraded: !clean
+          scene: serialize('', width, height), actions, degraded: !clean
         }, '*');
       } catch (error) {
         parent.postMessage({ type: 'html-figma-state-error', token, requestId: data.requestId, message: error.message }, '*');

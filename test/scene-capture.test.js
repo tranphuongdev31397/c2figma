@@ -265,6 +265,39 @@ test('exposes the bounded interactive state graph contract', () => {
   assert.match(source, /fingerprintToState/);
 });
 
+// Discovery is what stamps data-c2figma-action-key onto the elements. Serializing before it ran left
+// the scene carrying the tags of the previous state — or, on the baseline, none at all — so the
+// renderer could not find the layer a transition starts from and dropped the link.
+const runProbe = (name, call, scope) => {
+  const body = source.match(new RegExp('\\n {2}function ' + name + '\\([\\s\\S]*?\\n {2}\\}\\n'))[0];
+  vm.runInNewContext(body + '\n' + call + ';', scope);
+};
+
+const probeScope = calls => ({
+  setTimeout, Promise, Error, JSON, Map, Set, Date,
+  parent: { postMessage(message) { calls.push('post:' + (message.actions || []).length); } },
+  window: { addEventListener() {} },
+  toolkit: () => ({
+    waitForStable: async () => {},
+    replay: async () => {},
+    settleAfterAction: async () => {},
+    listActions: () => { calls.push('tag'); return [{ key: 'a1', label: 'x', trigger: 'ON_CLICK' }]; }
+  }),
+  actionKeyFor: () => 'a1',
+  serialize: () => { calls.push('serialize'); return { nodes: [] }; },
+  fingerprint: () => 'fp'
+});
+
+test('tags the state it is about to serialize, not the one before it', async () => {
+  const calls = [];
+  const scope = probeScope(calls);
+  runProbe('captureInteractivePath', "captureInteractivePath(toolkit, actionKeyFor, serialize, 'tok', 100, 100, 0, [], 0)", scope);
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  assert.deepEqual(calls, ['tag', 'serialize', 'post:1'],
+    'discovery stamps the action keys, so it has to run before the scene is read');
+});
+
 test('replays actions by stable key instead of candidate index', () => {
   assert.match(source, /actionKeyFor/);
   assert.match(source, /find\(.*\.key.*actionPath/);
