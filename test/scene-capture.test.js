@@ -52,6 +52,67 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
   );
 });
 
+// A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
+// child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
+// backdrop: the dialog's white sheet vanished and the page showed through its body.
+const fakeDocument = elements => {
+  const styles = new Map();
+  const rects = new Map();
+  for (const element of elements) {
+    element.childNodes = [];
+    element.getAttribute = name => element.attributes?.[name] ?? null;
+    element.closest = () => null;
+    element.id = element.attributes?.id || '';
+    styles.set(element, {
+      display: 'block', visibility: 'visible', opacity: String(element.opacity ?? 1),
+      position: element.position || 'static', zIndex: 'auto', overflow: 'visible',
+      backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(0, 0, 0)', fontSize: '14px', fontWeight: '400',
+      borderTopWidth: '0px', borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
+      borderTopColor: 'rgb(0, 0, 0)', borderRightColor: 'rgb(0, 0, 0)', borderBottomColor: 'rgb(0, 0, 0)', borderLeftColor: 'rgb(0, 0, 0)',
+      borderTopLeftRadius: '0px', borderTopRightRadius: '0px', borderBottomRightRadius: '0px', borderBottomLeftRadius: '0px'
+    });
+    rects.set(element, { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 });
+    element.getBoundingClientRect = () => rects.get(element);
+  }
+  return {
+    querySelectorAll: () => elements,
+    getComputedStyle: element => styles.get(element)
+  };
+};
+
+const runSerialize = elements => {
+  const body = source.match(/\n {2}function serializeScene\([\s\S]*?\n {2}\}\n/)[0];
+  const dom = fakeDocument(elements);
+  const scope = {
+    document: dom,
+    getComputedStyle: dom.getComputedStyle,
+    Set, Map, Math, Number, JSON, Error, String, Array
+  };
+  vm.runInNewContext(body + '\nresult = serializeScene("", 1440, 900);', scope);
+  return scope.result;
+};
+
+test('drops the whole subtree of a layer faded to nothing, not just that layer', () => {
+  const overlay = { tagName: 'DIV', attributes: { class: 'role-modal-overlay' }, parentElement: null, position: 'fixed' };
+  const sheet = { tagName: 'DIV', attributes: { class: 'role-modal' }, parentElement: overlay, opacity: 0 };
+  const head = { tagName: 'DIV', attributes: { class: 'rm-head' }, parentElement: sheet };
+  const title = { tagName: 'SPAN', attributes: {}, parentElement: head };
+
+  const names = runSerialize([overlay, sheet, head, title]).nodes.map(node => node.name);
+
+  assert.ok(names.some(name => /role-modal-overlay/.test(name)), 'the backdrop is fully opaque and stays');
+  assert.ok(!names.some(name => /rm-head/.test(name)), 'a child of a fully faded layer is invisible too');
+  assert.ok(!names.some(name => /role-modal ·/.test(name)), 'the faded layer itself is still dropped');
+  assert.equal(names.length, 1);
+});
+
+test('re-checks for animations that only start after the first look', () => {
+  // the dialog remounts on a later tick, so one getAnimations() call can find a calm page and
+  // serialize straight into the next fade.
+  assert.match(source, /calm/);
+  assert.doesNotMatch(source, /await sleep\(settleMs\);\s*await waitForAnimations\(\);\s*await sleep\(settleMs\);\s*\}/);
+});
+
 test('bounds exploration by depth rather than by a state count', () => {
   const { explorationLimits } = load();
 

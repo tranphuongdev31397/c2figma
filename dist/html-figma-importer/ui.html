@@ -169,7 +169,10 @@
         document.querySelectorAll('*').length,
         (body ? body.innerText : '').replace(/\s+/g, ' ').slice(0, 1000)
       ].join('|');
-      if (signature === previous) stableTicks += 1;
+      // an element mid-fade keeps the same signature for its whole animation, so a page that only
+      // looks still is not settled until nothing is animating on it
+      const animating = document.getAnimations && document.getAnimations().some(animation => animation.playState === 'running');
+      if (signature === previous && !animating) stableTicks += 1;
       else { previous = signature; stableTicks = 0; }
       if (Date.now() - started >= minimumDelay && stableTicks >= 3) return serialize(token, width, height);
       if (Date.now() - started >= 10000) return serialize(token, width, height);
@@ -227,12 +230,23 @@
       const nodes = [];
       const ids = new Map();
       const elements = [...document.querySelectorAll('*')].filter(element => !ignored.has(element.tagName));
+      // Opacity is the one hiding rule a child cannot opt out of: at opacity 0 the whole subtree is
+      // gone. Dropping only the faded element left its children behind as a ghost of the layer — a
+      // dialog caught in the first frames of its fade lost its sheet and kept its contents.
+      const faded = new Set();
+      const underFaded = element => {
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          if (faded.has(ancestor)) return true;
+        }
+        return false;
+      };
 
       for (const element of elements) {
         const isSvg = element.tagName.toLowerCase() === 'svg';
         if (!isSvg && element.closest('svg')) continue;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
+        if (Number(style.opacity) === 0 || underFaded(element)) { faded.add(element); continue; }
         if (!visible(element, style, rect) || technical(element) || nodes.length >= 2000) continue;
         const id = 'n' + nodes.length;
         ids.set(element, id);
@@ -407,10 +421,15 @@
         ]);
       }
     };
+    // The dialog remounts on a later tick, so a single look can find a calm page and serialize
+    // straight into the fade that starts right after. Only a page still calm on a second look is calm.
     const settleAfterAction = async () => {
-      await sleep(settleMs);
-      await waitForAnimations();
-      await sleep(settleMs);
+      let calm = 0;
+      for (let attempt = 0; attempt < 8 && calm < 2; attempt += 1) {
+        await sleep(settleMs);
+        await waitForAnimations();
+        calm = document.getAnimations && document.getAnimations().some(animation => animation.playState === 'running') ? 0 : calm + 1;
+      }
     };
     const replay = async actionPath => {
       for (let depth = 0; depth < actionPath.length; depth += 1) {
