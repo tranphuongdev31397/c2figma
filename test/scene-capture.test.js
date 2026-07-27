@@ -113,6 +113,21 @@ test('re-checks for animations that only start after the first look', () => {
   assert.doesNotMatch(source, /await sleep\(settleMs\);\s*await waitForAnimations\(\);\s*await sleep\(settleMs\);\s*\}/);
 });
 
+test('caps how long one action may wait to settle', () => {
+  // an unbounded re-check spent 12s per action and blew the per-path budget, so every path that
+  // opened something animated timed out and its state never existed.
+  const { settleProfileFor } = load();
+  const budget = source.match(/const SETTLE_BUDGET_MS = (\d+)/);
+
+  assert.ok(budget, 'the settle needs a stated ceiling');
+  const perAction = Number(budget[1]);
+  assert.ok(perAction <= 2000, 'a single action must not eat seconds');
+  // two actions deep plus hydration still has to fit inside the path timeout
+  const profile = settleProfileFor('<div data-src="/__bundler/manifest.json"></div>');
+  assert.ok(profile.minimumDelay + perAction * 2 < profile.timeoutMs, 'settling must fit the path budget');
+  assert.match(source, /SETTLE_BUDGET_MS/);
+});
+
 test('bounds exploration by depth rather than by a state count', () => {
   const { explorationLimits } = load();
 

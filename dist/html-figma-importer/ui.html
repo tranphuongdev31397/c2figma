@@ -170,8 +170,10 @@
         (body ? body.innerText : '').replace(/\s+/g, ' ').slice(0, 1000)
       ].join('|');
       // an element mid-fade keeps the same signature for its whole animation, so a page that only
-      // looks still is not settled until nothing is animating on it
-      const animating = document.getAnimations && document.getAnimations().some(animation => animation.playState === 'running');
+      // looks still is not settled until nothing is animating on it — but a page that animates
+      // forever still has to be captured, so the rule lapses after the first seconds
+      const animating = Date.now() - started < 5000
+        && document.getAnimations && document.getAnimations().some(animation => animation.playState === 'running');
       if (signature === previous && !animating) stableTicks += 1;
       else { previous = signature; stableTicks = 0; }
       if (Date.now() - started >= minimumDelay && stableTicks >= 3) return serialize(token, width, height);
@@ -369,6 +371,7 @@
 
   // Shared by both probes; serialized into the iframe with toString(), so it must stay self-contained.
   function interactionToolkit(actionKeyFor, minimumDelay, settleMs) {
+    const SETTLE_BUDGET_MS = 1200;
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const visible = element => {
       const style = getComputedStyle(element);
@@ -409,9 +412,9 @@
       check();
     });
     // ponytail: the platform already tracks in-flight transitions; polling opacity would reinvent it badly.
-    const waitForAnimations = async () => {
+    const waitForAnimations = async (budget = 1500) => {
       if (!document.getAnimations) return;
-      const deadline = Date.now() + 1500;
+      const deadline = Date.now() + budget;
       while (Date.now() < deadline) {
         const running = document.getAnimations().filter(animation => animation.playState === 'running');
         if (!running.length) return;
@@ -422,12 +425,14 @@
       }
     };
     // The dialog remounts on a later tick, so a single look can find a calm page and serialize
-    // straight into the fade that starts right after. Only a page still calm on a second look is calm.
+    // straight into the fade that starts right after. Only a page still calm on a second look is
+    // calm — under a ceiling, because a page that never goes quiet must not eat the path's budget.
     const settleAfterAction = async () => {
+      const deadline = Date.now() + SETTLE_BUDGET_MS;
       let calm = 0;
-      for (let attempt = 0; attempt < 8 && calm < 2; attempt += 1) {
+      while (calm < 2 && Date.now() < deadline) {
         await sleep(settleMs);
-        await waitForAnimations();
+        await waitForAnimations(deadline - Date.now());
         calm = document.getAnimations && document.getAnimations().some(animation => animation.playState === 'running') ? 0 : calm + 1;
       }
     };
