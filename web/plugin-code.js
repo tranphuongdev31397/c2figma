@@ -14,18 +14,44 @@ const uniquePageName = base => { const wanted=String(base || 'Imported HTML').tr
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 const post = payload => { try { figma.ui.postMessage(payload); } catch (error) {} };
 const STATE_GAP = 160;
+const ROW_GAP = 260;
+const COLUMNS = 4;
+const DEPTH_LABELS = ['Trạng thái gốc', 'Sau 1 tương tác', 'Sau 2 tương tác'];
+// One endless row of frames is unreadable: wrap after COLUMNS and open a new row per exploration depth.
+const placeState = (target, viewport, depth) => {
+  if (!target) return {x:0, y:0, section:false};
+  const section = !target.placed || target.depth !== depth;
+  if (target.placed && (section || target.column >= COLUMNS)) { target.y = (target.y || 0) + viewport.height + ROW_GAP; target.column = 0; }
+  target.depth = depth; target.placed = (target.placed || 0) + 1;
+  const x = (target.column || 0) * (viewport.width + STATE_GAP);
+  target.column = (target.column || 0) + 1;
+  return {x, y: target.y || 0, section};
+};
+async function sectionLabel(page, spot, depth) {
+  try {
+    await figma.loadFontAsync({family:'Inter', style:'Bold'});
+    const label = figma.createText();
+    label.fontName = {family:'Inter', style:'Bold'};
+    label.characters = 'Cấp ' + depth + ' · ' + (DEPTH_LABELS[depth] || 'Sau ' + depth + ' tương tác');
+    label.fontSize = 48;
+    label.fills = [{type:'SOLID', color:{r:0.45,g:0.45,b:0.45}}];
+    label.x = spot.x; label.y = spot.y - 96;
+    page.appendChild(label);
+  } catch (error) {}
+}
 // Figma has no z-index: a dropdown left nested in its container paints under whatever that container
 // draws next. Hoist z-indexed layers to the frame, ordered by their stacking ancestors then own level.
 const stackLevel = item => { const level = Number.parseInt(item.zIndex, 10); return (item.position === 'absolute' || item.position === 'fixed') && Number.isFinite(level) ? level : null; };
 const compareStack = (a, b) => { for (let i = 0; i < Math.max(a.zPath.length, b.zPath.length); i += 1) { const l = a.zPath[i], r = b.zPath[i]; if (l === r) continue; if (l === undefined) return -1; if (r === undefined) return 1; return l - r; } return a.index - b.index; };
-async function renderScene(scene, title, pageName, target) {
+async function renderScene(scene, title, pageName, target, depth = 0) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   let page = target && target.page;
   if (!page) { page = figma.createPage(); page.name = uniquePageName(pageName || title); if (target) target.page = page; }
+  const spot = placeState(target, scene.viewport, depth);
   const root = figma.createFrame();
   root.name = 'Screen / ' + title;
-  root.x = target ? target.offsetX || 0 : 0;
-  root.y = 0;
+  root.x = spot.x;
+  root.y = spot.y;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
   root.layoutMode = 'NONE';
   root.fills = [];
@@ -36,15 +62,21 @@ async function renderScene(scene, title, pageName, target) {
   const positioned = [];
   const overlays = [];
   const zPaths = new Map([['__root__', []]]);
+  const issues = [];
+  // An icon Figma refuses to import must cost one icon, not the whole state.
+  const build = item => { if (item.kind === 'text') return figma.createText(); if (item.kind !== 'svg') return figma.createFrame();
+    try { return figma.createNodeFromSvg(item.svg); } catch (error) { issues.push({name:item.name||item.kind, message:error.message}); const placeholder=figma.createFrame(); placeholder.fills=[]; return placeholder; } };
   await figma.setCurrentPageAsync(page);
+  if (spot.section) await sectionLabel(page, spot, depth);
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
+    try {
     const level = stackLevel(item);
     const zPath = level === null ? (zPaths.get(item.parentId) || []) : (zPaths.get(item.parentId) || []).concat(level);
     zPaths.set(item.id, zPath);
     const parent = level === null ? byId.get(item.parentId) || root : root;
     const parentBounds = level === null ? bounds.get(item.parentId) || bounds.get('__root__') : bounds.get('__root__');
-    const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
+    const node = build(item);
     node.name = item.name || item.kind;
     node.x = Math.round(item.x - parentBounds.x);
     node.y = Math.round(item.y - parentBounds.y);
@@ -81,13 +113,14 @@ async function renderScene(scene, title, pageName, target) {
     if (item.actionKey) actionNodes.set(item.actionKey, node);
     byId.set(item.id, node);
     bounds.set(item.id, {x:item.x, y:item.y});
+    } catch (error) { issues.push({name:item.name||item.kind, message:error.message}); }
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) { post({type:'progress', current:index + 1, total:scene.nodes.length, title}); await yieldToFigma(); }
   }
   for (const item of positioned) item.parent.appendChild(item.node);
   overlays.sort(compareStack);
   for (const item of overlays) root.appendChild(item.node);
-  if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
-  return {page, root, actionNodes, pageName:page.name};
+  if (issues.length) { post({type:'render-issues', title, total:issues.length, issues:issues.slice(0,12)}); figma.notify(title + ': bỏ qua ' + issues.length + ' layer lỗi (' + issues[0].name + ': ' + issues[0].message + ')', {error:true}); }
+  return {page, root, actionNodes, pageName:page.name, issues};
 }
 const transitionTriggers = new Set(['ON_CLICK','ON_HOVER','ON_PRESS','ON_DRAG','ON_KEY_DOWN','ON_KEY_UP','AFTER_TIMEOUT','MOUSE_ENTER','MOUSE_LEAVE']);
 async function applyTransitions(graph, renderedStates) {
@@ -108,11 +141,11 @@ async function applyTransitions(graph, renderedStates) {
 async function renderGraph(graph, title, basePageName) {
   if (!graph || graph.version !== 2 || !Array.isArray(graph.states)) throw new Error('State graph không hợp lệ.');
   const rendered = new Map();
-  const target = {page:null, offsetX:0};
+  const target = {page:null, column:0, y:0, placed:0, depth:null};
   for (let index = 0; index < graph.states.length; index += 1) {
     const state = graph.states[index];
     if (!state?.id || rendered.has(state.id)) continue;
-    const scene = await renderScene(state.scene, state.label || title, basePageName, target);
+    const scene = await renderScene(state.scene, state.label || title, basePageName, target, Array.isArray(state.actionPath) ? state.actionPath.length : 0);
     scene.root.name = 'State / ' + (state.label || state.id);
     rendered.set(state.id, scene);
     post({type:'state-progress', current:index + 1, total:graph.states.length, title});

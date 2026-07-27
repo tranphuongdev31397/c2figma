@@ -97,6 +97,72 @@ test('renders a dropdown above the table it overlaps, and a dialog above both', 
   assert.ok(at('sheet menu') > at('sheet'), 'a menu inside the dialog paints above the dialog');
 });
 
+// A single layer Figma refuses to build used to abort the whole state, leaving the empty white frame
+// the render had already created — the "blank modal" report.
+test('keeps rendering the rest of a state when one layer fails to build', async () => {
+  let ids = 0;
+  const node = () => ({
+    id: 'node-' + (ids += 1),
+    name: '',
+    children: [],
+    owner: null,
+    appendChild(child) { if (child.owner) child.owner.children.splice(child.owner.children.indexOf(child), 1); child.owner = this; this.children.push(child); },
+    resize() {},
+    setReactionsAsync() { return Promise.resolve(); }
+  });
+  const messages = [];
+  const figma = {
+    root: { children: [] },
+    createPage() { const page = node(); this.root.children.push(page); return page; },
+    createFrame: node,
+    createText: node,
+    createNodeFromSvg() { throw new Error('Unsupported SVG'); },
+    setCurrentPageAsync: () => Promise.resolve(),
+    loadFontAsync: () => Promise.resolve(),
+    showUI() {},
+    notify() {},
+    closePlugin() {},
+    ui: { postMessage(payload) { messages.push(payload); }, onmessage: null }
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8'), {
+    figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, Number, JSON, Error, String
+  });
+  figma.ui.onmessage({
+    type: 'import',
+    spec: { title: 'T' },
+    pageName: 'P',
+    scene: {
+      version: 1,
+      viewport: { width: 200, height: 200 },
+      nodes: [
+        { id: 'a', parentId: '__root__', kind: 'frame', name: 'panel', x: 0, y: 0, width: 200, height: 200 },
+        { id: 'b', parentId: 'a', kind: 'svg', name: 'broken icon', x: 0, y: 0, width: 10, height: 10, svg: '<svg/>' },
+        { id: 'c', parentId: 'a', kind: 'frame', name: 'checkbox', x: 20, y: 20, width: 18, height: 18, fill: { r: 0, g: 1, b: 0, a: 1 } }
+      ]
+    }
+  });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const root = figma.root.children[0]?.children[0];
+  const names = [];
+  const walk = parent => { for (const child of parent.children) { names.push(child.name); walk(child); } };
+  assert.ok(root, 'the state frame must exist');
+  walk(root);
+  assert.ok(names.includes('checkbox'), 'layers after the failing one must still render, not leave a blank frame');
+  const issues = messages.find(message => message.type === 'render-issues');
+  assert.ok(issues, 'the failing layer must be reported instead of swallowed');
+  assert.match(JSON.stringify(issues), /broken icon/, 'the report must name the layer that failed');
+});
+
+test('every renderer wraps states into rows and survives a failing layer', () => {
+  for (const file of renderers) {
+    const source = fs.readFileSync(require.resolve(file), 'utf8');
+    assert.match(source, /placeState/, file + ' must lay states out in a grid');
+    assert.match(source, /ROW_GAP/, file + ' must space the rows');
+    assert.match(source, /issues/, file + ' must collect per-layer failures instead of aborting');
+  }
+});
+
 test('clips only frames whose HTML overflow clips content', () => {
   for (const file of renderers) {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /clipsContent/);
@@ -204,8 +270,9 @@ test('generated plugins render every state and link prototype reactions', async 
     const [page] = figma.root.children;
     assert.equal(figma.root.children.length, 1, 'every state belongs on one page');
     assert.equal(page.name, 'Employees');
-    assert.equal(page.children.length, 2, 'one root frame per state');
-    assert.ok(page.children[1].x >= page.children[0].x + 100, 'state frames must not overlap');
+    const frames = page.children.filter(child => /^State \//.test(child.name || ''));
+    assert.equal(frames.length, 2, 'one root frame per state');
+    assert.ok(frames[1].x >= frames[0].x + 100, 'state frames must not overlap');
     assert.equal(reactions.length, 1);
     assert.equal(reactions[0].value[0].trigger.type, 'ON_CLICK');
     assert.equal(reactions[0].value[0].actions[0].transition.type, 'DISSOLVE');
@@ -230,8 +297,9 @@ test('the streamed renderer lays every state out on one page', async () => {
   const [page] = figma.root.children;
   assert.equal(figma.root.children.length, 1);
   assert.equal(page.name, 'Employees');
-  assert.equal(page.children.length, 2);
-  assert.ok(page.children[1].x >= page.children[0].x + 100);
+  const frames = page.children.filter(child => /^State \//.test(child.name || ''));
+  assert.equal(frames.length, 2);
+  assert.ok(frames[1].x >= frames[0].x + 100);
   assert.equal(reactions.length, 1);
   assert.ok(reactions[0].value[0].actions[0].destinationId);
 });
@@ -256,6 +324,36 @@ test('links a transition as soon as both of its states exist', async () => {
   figma.ui.onmessage({ type: 'import-finish', graph });
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(reactions.length, 1, 'the final pass must not re-apply what it already linked');
+});
+
+// One endless row of frames is unreadable. States wrap into rows, and a new exploration depth always
+// starts its own row, so the page reads as sections instead of a strip.
+test('lays states out in rows, with a new row per exploration depth', async () => {
+  const reactions = [];
+  const { figma } = fakeFigma(reactions);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/bridge-code.js'), 'utf8'), {
+    figma, __html__: '', setTimeout, Map, Set, Promise, Array, Math, JSON, Error, String
+  });
+  const state = (id, actionPath) => ({
+    id, label: id, actionPath,
+    scene: { version: 1, viewport: { width: 100, height: 100 }, nodes: [] }
+  });
+  const paths = [[], ['a'], ['b'], ['c'], ['d'], ['e'], ['a', 'x']];
+
+  figma.ui.onmessage({ type: 'import-start', spec: { title: 'T' }, pageName: 'Grid' });
+  paths.forEach((actionPath, index) => figma.ui.onmessage({ type: 'import-state', state: state('state-0' + index, actionPath) }));
+  await new Promise(resolve => setTimeout(resolve, 80));
+
+  const frames = figma.root.children[0].children.filter(child => /^State \//.test(child.name || ''));
+  assert.equal(frames.length, paths.length);
+  const [root, ...rest] = frames;
+  assert.equal(rest[0].y > root.y, true, 'depth 1 must start a new row below the baseline');
+  const depthOne = rest.slice(0, 5);
+  assert.equal(new Set(depthOne.slice(0, 4).map(frame => frame.y)).size, 1, 'the first four of a depth share a row');
+  assert.equal(new Set(depthOne.slice(0, 4).map(frame => frame.x)).size, 4, 'and sit side by side');
+  assert.ok(depthOne[4].y > depthOne[0].y, 'the fifth wraps onto the next row');
+  assert.equal(depthOne[4].x, depthOne[0].x, 'a wrapped row restarts at the left edge');
+  assert.ok(rest[5].y > depthOne[4].y, 'depth 2 starts its own row again');
 });
 
 test('waits for an in-flight render before starting a replacement session', async () => {

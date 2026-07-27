@@ -227,6 +227,8 @@
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'state-progress'
             ? `Đang tạo page state ${message.current}/${message.total}`
+          : message.type === 'render-issues'
+            ? `${message.title}: bỏ qua ${message.total} layer lỗi — ${message.issues.map(issue => issue.name + ' (' + issue.message + ')').join('; ')}`
           : message.type === 'imported'
             ? `Đã tạo page “${message.pageName || message.title}” trong Figma.`
             : message.type === 'import-error'

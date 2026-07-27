@@ -12,6 +12,42 @@ const uniquePageName = base => {
 const yieldToFigma = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const STATE_GAP = 160;
+const ROW_GAP = 260;
+const COLUMNS = 4;
+const DEPTH_LABELS = ['Trạng thái gốc', 'Sau 1 tương tác', 'Sau 2 tương tác'];
+
+// One endless row of frames is unreadable. Each exploration depth opens its own row and a row wraps
+// after COLUMNS, so the page reads as sections. States stream in breadth-first, so depth never goes
+// backwards and a row's y only ever grows — no relayout of what is already on the page.
+const placeState = (target, viewport, depth) => {
+  if (!target) return { x: 0, y: 0, section: false };
+  const section = !target.placed || target.depth !== depth;
+  if (target.placed && (section || target.column >= COLUMNS)) {
+    target.y = (target.y || 0) + viewport.height + ROW_GAP;
+    target.column = 0;
+  }
+  target.depth = depth;
+  target.placed = (target.placed || 0) + 1;
+  const x = (target.column || 0) * (viewport.width + STATE_GAP);
+  target.column = (target.column || 0) + 1;
+  return { x, y: target.y || 0, section };
+};
+
+async function sectionLabel(page, spot, depth) {
+  try {
+    await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+    const label = figma.createText();
+    label.fontName = { family: 'Inter', style: 'Bold' };
+    label.characters = 'Cấp ' + depth + ' · ' + (DEPTH_LABELS[depth] || 'Sau ' + depth + ' tương tác');
+    label.fontSize = 48;
+    label.fills = [{ type: 'SOLID', color: { r: 0.45, g: 0.45, b: 0.45 } }];
+    label.x = spot.x;
+    label.y = spot.y - 96;
+    page.appendChild(label);
+  } catch (error) {
+    // a missing font is not worth losing the states over
+  }
+}
 
 // A dropdown or dialog escapes its container in CSS through z-index. Figma has no z-index, so leaving
 // it nested buries it under whatever that container paints next — the table rows, in this app.
@@ -34,7 +70,7 @@ const compareStack = (a, b) => {
 
 // ponytail: `target` lets streamed states share one page. Figma navigates between frames on the same
 // page, so a page per state only scattered the prototype across the file.
-async function renderScene(scene, title, pageName, target) {
+async function renderScene(scene, title, pageName, target, depth = 0) {
   if (!scene || scene.version !== 1 || !scene.viewport || !Array.isArray(scene.nodes)) throw new Error('Scene HTML không hợp lệ.');
   let page = target && target.page;
   if (!page) {
@@ -42,10 +78,11 @@ async function renderScene(scene, title, pageName, target) {
     page.name = uniquePageName(pageName || title);
     if (target) target.page = page;
   }
+  const spot = placeState(target, scene.viewport, depth);
   const root = figma.createFrame();
   root.name = 'Screen / ' + title;
-  root.x = target ? target.offsetX || 0 : 0;
-  root.y = 0;
+  root.x = spot.x;
+  root.y = spot.y;
   root.resize(Math.max(1, scene.viewport.width), Math.max(1, scene.viewport.height));
   root.layoutMode = 'NONE';
   root.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
@@ -56,55 +93,73 @@ async function renderScene(scene, title, pageName, target) {
   const positioned = [];
   const overlays = [];
   const zPaths = new Map([['__root__', []]]);
+  const issues = [];
 
   await figma.setCurrentPageAsync(page);
+  if (spot.section) await sectionLabel(page, spot, depth);
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
-    const level = stackLevel(item);
-    const inherited = zPaths.get(item.parentId) || [];
-    const zPath = level === null ? inherited : inherited.concat(level);
-    zPaths.set(item.id, zPath);
-    const parent = level === null ? byId.get(item.parentId) || root : root;
-    const parentBounds = level === null ? bounds.get(item.parentId) || bounds.get('__root__') : bounds.get('__root__');
-    const node = item.kind === 'text' ? figma.createText() : item.kind === 'svg' ? figma.createNodeFromSvg(item.svg) : figma.createFrame();
-    node.name = item.name || item.kind;
-    node.x = Math.round(item.x - parentBounds.x);
-    node.y = Math.round(item.y - parentBounds.y);
-    node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height)));
-    node.opacity = Math.max(0, Math.min(1, item.opacity ?? 1));
+    try {
+      const level = stackLevel(item);
+      const inherited = zPaths.get(item.parentId) || [];
+      const zPath = level === null ? inherited : inherited.concat(level);
+      zPaths.set(item.id, zPath);
+      const parent = level === null ? byId.get(item.parentId) || root : root;
+      const parentBounds = level === null ? bounds.get(item.parentId) || bounds.get('__root__') : bounds.get('__root__');
+      // An icon Figma refuses to import must cost one icon, not the whole state.
+      const build = () => {
+        if (item.kind === 'text') return figma.createText();
+        if (item.kind !== 'svg') return figma.createFrame();
+        try { return figma.createNodeFromSvg(item.svg); }
+        catch (error) {
+          issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
+          const placeholder = figma.createFrame();
+          placeholder.fills = [];
+          return placeholder;
+        }
+      };
+      const node = build();
+      node.name = item.name || item.kind;
+      node.x = Math.round(item.x - parentBounds.x);
+      node.y = Math.round(item.y - parentBounds.y);
+      node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height)));
+      node.opacity = Math.max(0, Math.min(1, item.opacity ?? 1));
 
-    if (item.kind === 'text') {
-      const style = fontStyle(item.fontWeight);
-      await figma.loadFontAsync({ family: 'Inter', style });
-      node.fontName = { family: 'Inter', style };
-      node.characters = item.text || '';
-      node.fontSize = Math.max(1, item.fontSize || 14);
-      node.fills = [solid(item.color || { r: .1, g: .1, b: .1 })];
-      node.textAutoResize = 'WIDTH_AND_HEIGHT';
-    } else if (item.kind !== 'svg') {
-      node.layoutMode = 'NONE';
-      node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
-      node.fills = item.fill ? [solid(item.fill)] : [];
-      const borders = item.borders;
-      const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
-      const borderPaint = borders ? [borders.top, borders.right, borders.bottom, borders.left].find(side => side.width)?.color : item.stroke;
-      if (borderPaint && Math.max(weights.top, weights.right, weights.bottom, weights.left)) {
-        node.strokes = [solid(borderPaint)];
-        node.strokeWeight = Math.max(weights.top, weights.right, weights.bottom, weights.left);
-        node.strokeTopWeight = weights.top;
-        node.strokeRightWeight = weights.right;
-        node.strokeBottomWeight = weights.bottom;
-        node.strokeLeftWeight = weights.left;
+      if (item.kind === 'text') {
+        const style = fontStyle(item.fontWeight);
+        await figma.loadFontAsync({ family: 'Inter', style });
+        node.fontName = { family: 'Inter', style };
+        node.characters = item.text || '';
+        node.fontSize = Math.max(1, item.fontSize || 14);
+        node.fills = [solid(item.color || { r: .1, g: .1, b: .1 })];
+        node.textAutoResize = 'WIDTH_AND_HEIGHT';
+      } else if (item.kind !== 'svg') {
+        node.layoutMode = 'NONE';
+        node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
+        node.fills = item.fill ? [solid(item.fill)] : [];
+        const borders = item.borders;
+        const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
+        const borderPaint = borders ? [borders.top, borders.right, borders.bottom, borders.left].find(side => side.width)?.color : item.stroke;
+        if (borderPaint && Math.max(weights.top, weights.right, weights.bottom, weights.left)) {
+          node.strokes = [solid(borderPaint)];
+          node.strokeWeight = Math.max(weights.top, weights.right, weights.bottom, weights.left);
+          node.strokeTopWeight = weights.top;
+          node.strokeRightWeight = weights.right;
+          node.strokeBottomWeight = weights.bottom;
+          node.strokeLeftWeight = weights.left;
+        }
+        if (item.radius) node.cornerRadius = item.radius;
       }
-      if (item.radius) node.cornerRadius = item.radius;
-    }
 
-    parent.appendChild(node);
-    if (level !== null) overlays.push({ zPath, index, node });
-    else if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({ parent, node });
-    if (item.actionKey) actionNodes.set(item.actionKey, node);
-    byId.set(item.id, node);
-    bounds.set(item.id, { x: item.x, y: item.y });
+      parent.appendChild(node);
+      if (level !== null) overlays.push({ zPath, index, node });
+      else if (item.position === 'absolute' || item.position === 'fixed' || item.position === 'sticky') positioned.push({ parent, node });
+      if (item.actionKey) actionNodes.set(item.actionKey, node);
+      byId.set(item.id, node);
+      bounds.set(item.id, { x: item.x, y: item.y });
+    } catch (error) {
+      issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
+    }
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) {
       figma.ui.postMessage({ type: 'progress', current: index + 1, total: scene.nodes.length, title });
       await yieldToFigma();
@@ -113,13 +168,17 @@ async function renderScene(scene, title, pageName, target) {
   for (const item of positioned) item.parent.appendChild(item.node);
   overlays.sort(compareStack);
   for (const item of overlays) root.appendChild(item.node);
-  if (target) target.offsetX = root.x + Math.max(1, scene.viewport.width) + STATE_GAP;
-  return { page, root, actionNodes, pageName: page.name };
+  if (issues.length) {
+    figma.ui.postMessage({ type: 'render-issues', title, total: issues.length, issues: issues.slice(0, 12) });
+    figma.notify(title + ': bỏ qua ' + issues.length + ' layer lỗi (' + issues[0].name + ': ' + issues[0].message + ')', { error: true });
+  }
+  return { page, root, actionNodes, pageName: page.name, issues };
 }
 
 async function renderState(state, title, pageName, target) {
   if (!state || !state.id) throw new Error('State HTML không hợp lệ.');
-  return { stateId: state.id, ...await renderScene(state.scene, state.label || title, pageName, target) };
+  const depth = Array.isArray(state.actionPath) ? state.actionPath.length : 0;
+  return { stateId: state.id, ...await renderScene(state.scene, state.label || title, pageName, target, depth) };
 }
 
 const transitionTriggers = new Set(['ON_CLICK', 'ON_HOVER', 'ON_PRESS', 'ON_DRAG', 'ON_KEY_DOWN', 'ON_KEY_UP', 'AFTER_TIMEOUT', 'MOUSE_ENTER', 'MOUSE_LEAVE']);
@@ -180,7 +239,7 @@ const sessionFor = ({ spec, pageName } = {}) => {
     title,
     states: new Map(),
     rendered: new Map(),
-    target: { page: null, offsetX: 0 },
+    target: { page: null, column: 0, y: 0, placed: 0, depth: null },
     linked: new Set(),
     queue: Promise.resolve(),
     failed: false
