@@ -47,6 +47,16 @@
     .chip { border: 1px solid #dbe8d7; background: #ebf3e0; color: #16993b; border-radius: 999px; padding: 5px 9px; font-size: 12px; }
     .note { color: #737373; font-size: 12px; line-height: 1.5; margin: 18px 0 0; }
     #status { min-height: 18px; margin-top: 12px; color: #16993b; font-size: 12px; }
+    .log-open { border-color: #d4b3b3; color: #a33; }
+    .log-open span { display: inline-block; min-width: 16px; margin-left: 2px; padding: 0 5px; border-radius: 999px; background: #a33; color: white; font-size: 11px; }
+    .log-sheet { position: fixed; inset: 0; background: #0a0a0a73; display: grid; place-items: center; padding: 20px; z-index: 20; }
+    .log-sheet[hidden] { display: none; }
+    .log-card { width: min(640px, 100%); max-height: 80vh; display: flex; flex-direction: column; gap: 10px; background: white; border-radius: 12px; padding: 16px; }
+    .log-head { display: flex; align-items: center; justify-content: space-between; }
+    .log-head button { border: 0; background: none; height: auto; padding: 0; font-size: 15px; }
+    #log-text { flex: 1; min-height: 240px; resize: none; border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #171717; }
+    .log-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .log-foot span { color: #737373; font-size: 12px; }
     code { font-size: 12px; background: #f5f5f5; border-radius: 5px; padding: 2px 5px; }
     @media (max-width: 620px) {
       .actions { align-items: stretch; flex-direction: column; }
@@ -77,11 +87,19 @@
       <div class="actions">
         <a class="guide-link" href="/guide">Hướng dẫn sử dụng <span>↗</span></a>
         <div class="primary-actions">
+          <button id="log-open" class="log-open" hidden>Log lỗi <span id="log-count">0</span></button>
           <a class="button install" data-install href="/downloads/html-figma-importer.zip" download>Cài plugin một lần</a>
           <button id="download" class="fallback" disabled>Tải theo HTML (.zip)</button>
         </div>
       </div>
       <div id="status"></div>
+      <div class="log-sheet" id="log-sheet" hidden>
+        <div class="log-card">
+          <div class="log-head"><strong>Log lỗi</strong><button id="log-close" aria-label="Đóng">✕</button></div>
+          <textarea id="log-text" readonly spellcheck="false"></textarea>
+          <div class="log-foot"><span id="log-hint">Bấm “Sao chép” rồi dán vào chat.</span><button id="log-copy" class="primary">Sao chép</button></div>
+        </div>
+      </div>
       <p class="note" id="note">Cài plugin Figma một lần để các lần sau chọn HTML và render trực tiếp trong Figma Desktop.</p>
     </section>
   </main>
@@ -884,6 +902,25 @@ setTimeout(boot, 0);`;
 </script>
   <script>
     const $ = id => document.getElementById(id);
+    // Figma shows one toast at a time and it disappears; a run that fails somewhere in the middle
+    // leaves nothing to report. Everything worth reporting is kept here so it can be copied out.
+    const logLines = [];
+    function log(line) {
+      const time = new Date().toISOString().slice(11, 19);
+      logLines.push('[' + time + '] ' + line);
+      $('log-count').textContent = logLines.length;
+      $('log-open').hidden = false;
+      $('log-text').value = logLines.join('\n');
+    }
+    $('log-open').addEventListener('click', () => { $('log-sheet').hidden = false; $('log-text').focus(); $('log-text').select(); });
+    $('log-close').addEventListener('click', () => { $('log-sheet').hidden = true; });
+    $('log-copy').addEventListener('click', async () => {
+      $('log-text').select();
+      try { await navigator.clipboard.writeText(logLines.join('\n')); $('log-hint').textContent = 'Đã sao chép ' + logLines.length + ' dòng.'; }
+      catch (error) { $('log-hint').textContent = 'Không sao chép tự động được — bấm Ctrl/Cmd+C.'; }
+    });
+    window.addEventListener('error', event => log('window.error: ' + event.message));
+    window.addEventListener('unhandledrejection', event => log('unhandled: ' + (event.reason?.message || event.reason)));
     let selected = null;
     const inFigma = window.parent !== window;
     const clean = value => { const el = document.createElement('textarea'); el.innerHTML = value; return el.value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); };
@@ -942,6 +979,7 @@ setTimeout(boot, 0);`;
       $('download').disabled=true;
       const {file, html}=selected;
       const interactive=$('interactive').checked;
+      log('run: ' + file.name + ' · ' + html.length + ' bytes · interactive=' + interactive + ' · mode=' + $('mode').value + ' · inFigma=' + inFigma);
 
       if (!interactive) {
         $('status').textContent='Đang dựng layout '+file.name+'…';
@@ -962,6 +1000,7 @@ setTimeout(boot, 0);`;
       if (inFigma) { selected.directStarted=true; postToFigma({type:'import-start',spec:selected.spec,pageName:selected.pageName,totalHint:0}); }
       const onState = (state, graph) => {
         if (selected.file !== file) return;
+        log('state ' + state.id + ' · ' + state.scene.nodes.length + ' node · path=' + JSON.stringify(state.actionPath) + ' · ' + state.label.slice(0, 40));
         selected.graph=graph;
         selected.scene ||= state.scene;
         const layers=graph.states.reduce((total,item)=>total+item.scene.nodes.length,0);
@@ -988,6 +1027,7 @@ setTimeout(boot, 0);`;
         else deliver();
       } catch (error) {
         if (selected.file !== file) return;
+        log('capture failed: ' + error.message);
         $('status').textContent='Không khám phá được state ('+error.message+'); dùng layout cơ bản.';
         if (selected.directStarted) postToFigma({type:'import-error',message:error.message});
         try {
@@ -1018,6 +1058,10 @@ setTimeout(boot, 0);`;
       window.onmessage = event => {
         const message = event.data.pluginMessage;
         if (!message) return;
+        if (message.type === 'render-issues') log('render-issues · ' + message.title + ' · ' + message.total + ' layer: ' + message.issues.map(issue => issue.kind + ' "' + issue.name + '" → ' + issue.message).join(' | '));
+        if (message.type === 'state-summary') log('rendered · ' + message.title + ' · ' + message.built + '/' + message.nodes + ' layer · ' + message.issues + ' lỗi');
+        if (message.type === 'import-error' || message.type === 'error') log('render error: ' + message.message);
+        if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped);
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'state-progress'

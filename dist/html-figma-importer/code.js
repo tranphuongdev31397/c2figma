@@ -94,6 +94,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
   const overlays = [];
   const zPaths = new Map([['__root__', []]]);
   const issues = [];
+  let built = 0;
 
   await figma.setCurrentPageAsync(page);
   if (spot.section) await sectionLabel(page, spot, depth);
@@ -137,6 +138,8 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         node.layoutMode = 'NONE';
         node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
         node.fills = item.fill ? [solid(item.fill)] : [];
+        // A fill Figma accepts but does not keep leaves a see-through frame and no error — say so.
+        if (item.fill && !(node.fills && node.fills.length)) issues.push({ name: node.name, kind: 'fill', message: 'Figma bỏ fill ' + JSON.stringify(item.fill) });
         const borders = item.borders;
         const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
         const borderPaint = borders ? [borders.top, borders.right, borders.bottom, borders.left].find(side => side.width)?.color : item.stroke;
@@ -157,6 +160,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       if (item.actionKey) actionNodes.set(item.actionKey, node);
       byId.set(item.id, node);
       bounds.set(item.id, { x: item.x, y: item.y });
+      built += 1;
     } catch (error) {
       issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
     }
@@ -168,6 +172,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
   for (const item of positioned) item.parent.appendChild(item.node);
   overlays.sort(compareStack);
   for (const item of overlays) root.appendChild(item.node);
+  figma.ui.postMessage({ type: 'state-summary', title, nodes: scene.nodes.length, built, issues: issues.length });
   if (issues.length) {
     figma.ui.postMessage({ type: 'render-issues', title, total: issues.length, issues: issues.slice(0, 12) });
     figma.notify(title + ': bỏ qua ' + issues.length + ' layer lỗi (' + issues[0].name + ': ' + issues[0].message + ')', { error: true });
