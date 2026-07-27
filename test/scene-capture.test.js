@@ -180,7 +180,9 @@ test('finds a dialog to dismiss by shape, not by the class it may not have', () 
 test('reloads the reused iframe instead of capturing a leftover modal', () => {
   // a path replayed on top of the previous path's modal is not that path, so its state is worthless
   assert.match(source, /const boot = /);
-  assert.match(source, /await boot\(\);\s*\n\s*return send\(actionPath\)/);
+  assert.match(source, /await boot\(\);\s*\n\s*const retry = await send\(actionPath\)/);
+  // and a reload that still cannot reach the baseline must fail the path rather than pass off a leftover
+  assert.match(source, /if \(retry\.degraded\) throw/);
 });
 
 test('captures z-index so the renderer can rebuild stacking order', () => {
@@ -296,6 +298,51 @@ test('tags the state it is about to serialize, not the one before it', async () 
 
   assert.deepEqual(calls, ['tag', 'serialize', 'post:1'],
     'discovery stamps the action keys, so it has to run before the scene is read');
+});
+
+// Action keys carry the element's position in the discovered list, so a leftover dropdown shifts
+// every key after it and the replay asks for one that no longer exists. Replaying on a page that is
+// not back at the baseline cannot produce that path's state, whatever it produces instead.
+const reuseScope = calls => {
+  const scope = probeScope(calls);
+  let dirty = true;
+  const element = { click() { calls.push('dismiss'); }, getBoundingClientRect: () => ({ width: 1440, height: 900 }), dispatchEvent() {}, blur() {} };
+  scope.innerWidth = 1440;
+  scope.innerHeight = 900;
+  scope.KeyboardEvent = function () {};
+  scope.getComputedStyle = () => ({ position: 'fixed', display: 'block', visibility: 'visible', opacity: '1' });
+  scope.document = {
+    body: { querySelectorAll: () => [element] },
+    querySelectorAll: () => [],
+    activeElement: element,
+    dispatchEvent() {}
+  };
+  scope.window = { addEventListener: (name, handler) => { if (name === 'message') scope.handler = handler; } };
+  scope.toolkit = () => ({
+    waitForStable: async () => {},
+    settleAfterAction: async () => {},
+    visible: () => true,
+    replay: async () => { calls.push('replay'); },
+    listActions: () => { calls.push('tag'); return []; }
+  });
+  // the baseline is taken at boot, then the page stays dirty however often it is asked to reset
+  scope.fingerprint = () => (dirty === true ? 'baseline' : 'leftover');
+  scope.markDirty = () => { dirty = 'left over'; };
+  return scope;
+};
+
+test('does not replay a path on a page that never got back to the baseline', async () => {
+  const calls = [];
+  const scope = reuseScope(calls);
+  runProbe('reusableProbe', "reusableProbe(toolkit, actionKeyFor, serialize, fingerprint, 'tok', 100, 100, 0, 0)", scope);
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  scope.markDirty();
+  calls.length = 0;
+  await scope.handler({ data: { token: 'tok', type: 'run-path', requestId: 1, actionPath: ['a1'] } });
+
+  assert.ok(!calls.includes('replay'), 'a dirty page cannot produce the state this path asked for');
+  assert.ok(calls.some(call => /^post:/.test(call)), 'the runner still gets an answer, so it can reload and retry');
 });
 
 test('replays actions by stable key instead of candidate index', () => {
