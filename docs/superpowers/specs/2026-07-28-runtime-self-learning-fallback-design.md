@@ -77,9 +77,8 @@ tuyệt đối, không chung platform).
 
 ```json
 {
-  "signature": "fill|has-border:false|has-radius:true",
+  "signature": "fill|alphaOutOfRange:true|hasExtraFields:false",
   "fallbackKind": "fill-dropped",
-  "resolution": { "clampOpacity": true, "dropExtraFields": true },
   "hitCount": 1,
   "firstSeen": "...",
   "lastSeen": "..."
@@ -106,8 +105,8 @@ bước "quét DOM" riêng:
    localStorage/clientStorage — dùng 1 lần cho phiên import này).
 4. Khi xử lý 1 node trong vòng lặp: tra cache trước.
    - Có rule khớp signature, `fallbackKind` = `'svg-render-failed'` hoặc
-     `'fill-dropped'` → áp `resolution` đã lưu (xem Section 3b), bỏ qua
-     đường đi mặc định sẽ throw/bị Figma bỏ fill.
+     `'fill-dropped'` → áp thẳng xử lý cố định tương ứng (xem Section 3b),
+     bỏ qua đường đi mặc định sẽ throw/bị Figma bỏ fill.
    - Không khớp, hoặc `fallbackKind` = `'node-render-failed'` (v1 chưa có
      resolution tự động — xem "Ngoài phạm vi" ở Section 1) → chạy nhánh gốc
      như hiện tại; nếu nó vẫn rơi vào 1 trong 3 `issues.push`, bắn
@@ -116,16 +115,22 @@ bước "quét DOM" riêng:
    `{ allowedDomains: ['none'] }`) thêm domain của backend, để `fetch` từ
    `code.js` được phép gọi ra ngoài.
 
-### 3b. Resolution áp dụng cho 2 fallbackKind có auto-remediation
+### 3b. Xử lý cố định theo fallbackKind — "học" là nhớ SIGNATURE nào cần nó
 
-- **`fill-dropped`**: khi rule khớp, thay vì gán thẳng `item.fill` như hiện
-  tại (`bridge-code.js:140`), clamp giá trị trước khi gán — ép `opacity` về
-  đúng khoảng `[0, 1]` và bỏ mọi field ngoài `{r,g,b,a}` — đây là nguyên nhân
-  thường gặp khiến Figma âm thầm bỏ fill.
-- **`svg-render-failed`**: khi rule khớp, bỏ qua hẳn lệnh gọi
-  `figma.createNodeFromSvg` (đã biết trước sẽ throw với `context` tương tự),
-  tạo placeholder frame ngay — tránh 1 exception vô ích, không đổi kết quả
-  hình ảnh so với nhánh catch hiện tại.
+Bản thân cách xử lý cho 2 fallbackKind dưới đây là **cố định, không đổi theo
+signature** — backend không lưu "resolution", chỉ lưu `signature → fallbackKind`
+đã từng khớp. Phần "học" nằm ở chỗ: signature nào (gặp ở bất kỳ HTML/user nào)
+đã biết trước sẽ rơi vào nhánh nào, để bỏ qua bước thử-rồi-thất-bại và áp
+thẳng xử lý tương ứng — không phải học ra 1 cách sửa mới.
+
+- **`fill-dropped`**: rule khớp → clamp `item.fill` trước khi gán (thay vì gán
+  thẳng như `bridge-code.js:140` hiện tại) — ép `opacity` về đúng khoảng
+  `[0, 1]` và bỏ mọi field ngoài `{r,g,b,a}`. Đây là nguyên nhân phổ biến
+  khiến Figma âm thầm bỏ fill.
+- **`svg-render-failed`**: rule khớp → bỏ qua hẳn lệnh gọi
+  `figma.createNodeFromSvg` (đã biết trước sẽ throw), tạo placeholder frame
+  ngay — tránh 1 exception vô ích, không đổi kết quả hình ảnh so với nhánh
+  catch hiện tại.
 - **`node-render-failed`** (generic catch): v1 chỉ ghi nhận + hiển thị trong
   run log ("lỗi này gặp N lần ở nơi khác"), không tự đổi hành vi — lỗi ở đây
   quá đa dạng (resize, stroke, corner radius...) để suy ra 1 fix chung an
