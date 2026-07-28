@@ -55,7 +55,7 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
 // child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
 // backdrop: the dialog's white sheet vanished and the page showed through its body.
-const fakeDocument = (elements, animations = []) => {
+const fakeDocument = (elements, animations = [], documentElement = { scrollHeight: 900, scrollWidth: 1440 }) => {
   const styles = new Map();
   const rects = new Map();
   for (const element of elements) {
@@ -68,24 +68,27 @@ const fakeDocument = (elements, animations = []) => {
       // read late: an animation that lands changes it between getAnimations() and the style read
       get opacity() { return String(element.opacity ?? 1); },
       position: element.position || 'static', zIndex: 'auto', overflow: 'visible',
+      overflowY: element.overflowY || 'visible', overflowX: element.overflowX || 'visible',
       backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(0, 0, 0)', fontSize: '14px', fontWeight: '400',
       borderTopWidth: '0px', borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
       borderTopColor: 'rgb(0, 0, 0)', borderRightColor: 'rgb(0, 0, 0)', borderBottomColor: 'rgb(0, 0, 0)', borderLeftColor: 'rgb(0, 0, 0)',
       borderTopLeftRadius: '0px', borderTopRightRadius: '0px', borderBottomRightRadius: '0px', borderBottomLeftRadius: '0px'
     });
-    rects.set(element, { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 });
+    rects.set(element, element.rect || { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 });
     element.getBoundingClientRect = () => rects.get(element);
+    element.style = element.style || { cssText: '', setProperty(prop, value) { this[prop] = value; } };
   }
   return {
+    documentElement,
     querySelectorAll: () => elements,
     getAnimations: () => animations,
     getComputedStyle: element => styles.get(element)
   };
 };
 
-const runSerialize = (elements, animations) => {
+const runSerialize = (elements, animations, documentElement) => {
   const body = source.match(/\n {2}function serializeScene\([\s\S]*?\n {2}\}\n/)[0];
-  const dom = fakeDocument(elements, animations);
+  const dom = fakeDocument(elements, animations, documentElement);
   const scope = {
     document: dom,
     getComputedStyle: dom.getComputedStyle,
@@ -107,6 +110,32 @@ test('drops the whole subtree of a layer faded to nothing, not just that layer',
   assert.ok(!names.some(name => /rm-head/.test(name)), 'a child of a fully faded layer is invisible too');
   assert.ok(!names.some(name => /role-modal ·/.test(name)), 'the faded layer itself is still dropped');
   assert.equal(names.length, 1);
+});
+
+// A fixed-height list panel with its own scrollbar (overflow-y:auto) hid every row past its
+// clientHeight from getBoundingClientRect, same as a page that never scrolled there — an invoice
+// list showing 8 of 12 rows lost the last 4 to this, not to any dedup logic.
+test('captures rows a fixed-height scrollable panel would otherwise clip, then restores its style', () => {
+  const relaxCalls = [];
+  const panel = {
+    tagName: 'DIV', attributes: { class: 'invoice-list' }, parentElement: null,
+    overflowY: 'auto', scrollHeight: 600, clientHeight: 200,
+    style: { cssText: 'overflow-y:auto;height:200px', setProperty(prop, value) { relaxCalls.push([prop, value]); } }
+  };
+  const belowFold = {
+    tagName: 'DIV', attributes: { class: 'row-12' }, parentElement: panel,
+    rect: { left: 0, top: 950, right: 100, bottom: 1000, width: 100, height: 50 }
+  };
+  const originalCssText = panel.style.cssText;
+
+  const result = runSerialize([panel, belowFold], [], { scrollHeight: 1200, scrollWidth: 1440 });
+  const names = result.nodes.map(node => node.name);
+
+  assert.ok(relaxCalls.some(([prop, value]) => prop === 'overflow-y' && value === 'visible'),
+    'the scrollable panel is un-clipped before measuring');
+  assert.equal(result.viewport.height, 1200, "the document is really 1200px tall, not the iframe's fixed 900px");
+  assert.ok(names.some(name => /row-12/.test(name)), 'a row past the original 900px cutoff is still captured');
+  assert.equal(panel.style.cssText, originalCssText, "the panel's clip is restored after measuring");
 });
 
 test('re-checks for animations that only start after the first look', () => {
@@ -354,6 +383,39 @@ test('replays actions by stable key instead of candidate index', () => {
 test('filters decorative candidates from action discovery', () => {
   assert.match(source, /aria-hidden.*true/);
   assert.match(source, /role.*presentation.*none/);
+});
+
+// A 12-row invoice list only differs row-to-row by data (customer, amount) — exploring every row
+// paid for one near-duplicate state per row. Sampling one per repeated sibling group keeps the one
+// genuinely different action (the filter pill) without the 8 duplicate detail-panel captures.
+test('samples one action per repeated sibling group instead of exploring every row', () => {
+  const body = source.match(/\n {2}function interactionToolkit\([\s\S]*?\n {2}\}\n/)[0]
+    + source.match(/\n {2}function actionKeyFor\([\s\S]*?\n {2}\}\n/)[0];
+  const rowParent = { tagName: 'TBODY' };
+  const makeElement = (overrides) => ({
+    tagName: 'TR', className: 'invoice-row', parentElement: rowParent,
+    disabled: false, textContent: 'row',
+    getAttribute: () => null, hasAttribute: () => false, setAttribute() {},
+    getBoundingClientRect: () => ({ width: 100, height: 40, right: 100, bottom: 40 }),
+    ...overrides
+  });
+  const rows = [makeElement({ textContent: 'row-1' }), makeElement({ textContent: 'row-2' }), makeElement({ textContent: 'row-3' })];
+  const filterPill = makeElement({ tagName: 'BUTTON', className: 'filter-pill', parentElement: { tagName: 'DIV' }, textContent: 'Đã phát hành' });
+  const forcedRow = makeElement({ textContent: 'row-forced' });
+  forcedRow.hasAttribute = name => name === 'data-c2figma-force-explore';
+  const elements = [...rows, filterPill, forcedRow];
+  const scope = {
+    document: { querySelectorAll: () => elements },
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    Set, Map
+  };
+  vm.runInNewContext(body + '\nresult = interactionToolkit(actionKeyFor, 0, 0).discover();', scope);
+
+  // spread into a plain array first — the vm-context array's species otherwise trips
+  // assert's cross-realm check even though every element below is reference-identical.
+  const kept = [...scope.result].map(action => action.element);
+  assert.deepEqual(kept, [rows[0], filterPill, forcedRow],
+    'the first row stands in for its group, the unrelated pill stays, and an opted-out element always stays');
 });
 
 test('filters external navigation schemes while allowing hash links', () => {

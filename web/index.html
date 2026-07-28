@@ -97,7 +97,7 @@
         <div class="log-card">
           <div class="log-head"><strong>Log lỗi</strong><button id="log-close" aria-label="Đóng">✕</button></div>
           <textarea id="log-text" readonly spellcheck="false"></textarea>
-          <div class="log-foot"><span id="log-hint">Bấm “Sao chép” rồi dán vào chat.</span><button id="log-copy" class="primary">Sao chép</button></div>
+          <div class="log-foot"><span id="log-hint">Bấm “Sao chép” rồi dán vào chat.</span><button id="log-download">Tải .txt</button><button id="log-copy" class="primary">Sao chép</button></div>
         </div>
       </div>
       <p class="note" id="note">Cài plugin Figma một lần để các lần sau chọn HTML và render trực tiếp trong Figma Desktop.</p>
@@ -119,6 +119,14 @@
     }
     $('log-open').addEventListener('click', () => { $('log-sheet').hidden = false; $('log-text').focus(); $('log-text').select(); });
     $('log-close').addEventListener('click', () => { $('log-sheet').hidden = true; });
+    $('log-download').addEventListener('click', () => {
+      const blob = new Blob([logLines.join('\n')], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'html-figma-importer-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
     $('log-copy').addEventListener('click', async () => {
       $('log-text').select();
       try { await navigator.clipboard.writeText(logLines.join('\n')); $('log-hint').textContent = 'Đã sao chép ' + logLines.length + ' dòng.'; }

@@ -82,6 +82,11 @@
   }
 
   function serializeScene(token, width, height) {
+    // A fixed-height panel with its own scrollbar (overflow:auto/scroll) hides rows past its
+    // clientHeight from getBoundingClientRect exactly as if they did not exist. Un-clip it before
+    // measuring so the full row count lays out; restored in `finally` so a reused iframe is not left
+    // mutated even if serialization throws partway through.
+    const scrollRestores = [];
     try {
       // Out-waiting a fade is a race the capture keeps losing: a dialog remounts on its own schedule,
       // and for its first frames its own opacity is 0 while its children are already opaque — so what
@@ -93,6 +98,19 @@
           try { animation.finish(); } catch (error) { /* infinite effect — nothing to land on */ }
         }
       }
+      for (const candidate of document.querySelectorAll('*')) {
+        const candidateStyle = getComputedStyle(candidate);
+        const scrollableY = (candidateStyle.overflowY === 'auto' || candidateStyle.overflowY === 'scroll') && candidate.scrollHeight > candidate.clientHeight + 1;
+        const scrollableX = (candidateStyle.overflowX === 'auto' || candidateStyle.overflowX === 'scroll') && candidate.scrollWidth > candidate.clientWidth + 1;
+        if (!scrollableY && !scrollableX) continue;
+        scrollRestores.push([candidate, candidate.style.cssText]);
+        if (scrollableY) { candidate.style.setProperty('overflow-y', 'visible'); candidate.style.setProperty('max-height', 'none'); candidate.style.setProperty('height', 'auto'); }
+        if (scrollableX) { candidate.style.setProperty('overflow-x', 'visible'); candidate.style.setProperty('max-width', 'none'); candidate.style.setProperty('width', 'auto'); }
+      }
+      // Un-clipping panels above can grow the whole document past the iframe's fixed viewport —
+      // read the true extent now so rows pushed below the original bound are not cut off next.
+      const fullHeight = Math.max(height, document.documentElement.scrollHeight);
+      const fullWidth = Math.max(width, document.documentElement.scrollWidth);
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
       const parseColor = value => {
         if (!value || value === 'transparent') return null;
@@ -123,7 +141,7 @@
         const color = parseColor(value) || { r: 0, g: 0, b: 0 };
         return '#' + [color.r, color.g, color.b].map(channel => Math.round(channel * 255).toString(16).padStart(2, '0')).join('');
       };
-      const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= width && rect.top <= height;
+      const visible = (element, style, rect) => style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0 && rect.left <= fullWidth && rect.top <= fullHeight;
       const technical = element => element.id.startsWith('__bundler_') || element.closest('[id^="__bundler_"]');
       const payload = value => /(?:data:)?(?:text\/html|application\/json);base64,/i.test(value) || /^[A-Za-z0-9+/]{240,}={0,2}$/.test(value);
       const nameIndex = new Map();
@@ -253,7 +271,7 @@
         }
       }
 
-      const scene = { version: 1, viewport: { width, height }, nodes };
+      const scene = { version: 1, viewport: { width: fullWidth, height: fullHeight }, nodes };
       if (!token) return scene;
       parent.postMessage({
         type: 'html-figma-scene',
@@ -263,6 +281,8 @@
     } catch (error) {
       if (!token) throw error;
       parent.postMessage({ type: 'html-figma-scene-error', token, message: error.message }, '*');
+    } finally {
+      scrollRestores.forEach(([element, cssText]) => { element.style.cssText = cssText; });
     }
   }
 
@@ -290,6 +310,7 @@
     const discover = () => {
       const selectors = 'button,a,summary,select,input,textarea,[role="button"],[aria-expanded],[aria-haspopup],[data-action],[data-state],[onclick],[style*="cursor: pointer"]';
       const seen = new Set();
+      const siblingGroups = new Map();
       return [...document.querySelectorAll(selectors)].filter(element => {
         if (seen.has(element) || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
         const role = (element.getAttribute('role') || '').toLowerCase();
@@ -297,6 +318,18 @@
         const href = element.getAttribute('href') || '';
         if (element.tagName === 'A' && !href.startsWith('#') && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
         seen.add(element);
+        return true;
+      }).filter(element => {
+        // ponytail: repeated siblings (invoice rows, filter pills, checkboxes) render near-identical
+        // states differing only by data, so sample one per group instead of one capture per repeat.
+        // Upgrade path: mark an element data-c2figma-force-explore if a group ever needs full coverage.
+        if (element.hasAttribute('data-c2figma-force-explore')) return true;
+        const className = typeof element.className === 'string' ? element.className : '';
+        const signature = element.tagName + '|' + className;
+        let bySignature = siblingGroups.get(element.parentElement);
+        if (!bySignature) { bySignature = new Set(); siblingGroups.set(element.parentElement, bySignature); }
+        if (bySignature.has(signature)) return false;
+        bySignature.add(signature);
         return true;
       }).map((element, index) => {
         const key = actionKeyFor(element, index + 1);
