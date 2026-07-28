@@ -82,11 +82,6 @@
   }
 
   function serializeScene(token, width, height) {
-    // A fixed-height panel with its own scrollbar (overflow:auto/scroll) hides rows past its
-    // clientHeight from getBoundingClientRect exactly as if they did not exist. Un-clip it before
-    // measuring so the full row count lays out; restored in `finally` so a reused iframe is not left
-    // mutated even if serialization throws partway through.
-    const scrollRestores = [];
     try {
       // Out-waiting a fade is a race the capture keeps losing: a dialog remounts on its own schedule,
       // and for its first frames its own opacity is 0 while its children are already opaque — so what
@@ -98,20 +93,24 @@
           try { animation.finish(); } catch (error) { /* infinite effect — nothing to land on */ }
         }
       }
-      for (const candidate of document.querySelectorAll('*')) {
-        const candidateStyle = getComputedStyle(candidate);
-        const scrollableY = (candidateStyle.overflowY === 'auto' || candidateStyle.overflowY === 'scroll') && candidate.scrollHeight > candidate.clientHeight + 1;
-        const scrollableX = (candidateStyle.overflowX === 'auto' || candidateStyle.overflowX === 'scroll') && candidate.scrollWidth > candidate.clientWidth + 1;
-        if (!scrollableY && !scrollableX) continue;
-        scrollRestores.push([candidate, candidate.style.cssText]);
-        if (scrollableY) { candidate.style.setProperty('overflow-y', 'visible'); candidate.style.setProperty('max-height', 'none'); candidate.style.setProperty('height', 'auto'); }
-        if (scrollableX) { candidate.style.setProperty('overflow-x', 'visible'); candidate.style.setProperty('max-width', 'none'); candidate.style.setProperty('width', 'auto'); }
-      }
-      // Un-clipping panels above can grow the whole document past the iframe's fixed viewport —
-      // read the true extent now so rows pushed below the original bound are not cut off next.
-      const fullHeight = Math.max(height, document.documentElement.scrollHeight);
-      const fullWidth = Math.max(width, document.documentElement.scrollWidth);
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
+      // A fixed-height panel with its own scrollbar (overflow:auto/scroll) still lays its overflowing
+      // rows out at their true position — getBoundingClientRect keeps reporting it even though the
+      // panel's own CSS clips it from view. Forcing overflow:visible on the live DOM to read that
+      // position used to work but reflowed everything downstream of it (table columns, sticky
+      // headers/footers) into a different, sometimes overlapping, layout. Reading the true extent
+      // instead — without touching a single style — captures the same rows with none of that risk.
+      let fullHeight = height;
+      let fullWidth = width;
+      for (const probe of document.querySelectorAll('*')) {
+        if (ignored.has(probe.tagName)) continue;
+        const probeStyle = getComputedStyle(probe);
+        if (probeStyle.display === 'none' || probeStyle.visibility === 'hidden' || Number(probeStyle.opacity) === 0) continue;
+        const probeRect = probe.getBoundingClientRect();
+        if (probeRect.width <= 0 || probeRect.height <= 0) continue;
+        if (probeRect.bottom > fullHeight) fullHeight = probeRect.bottom;
+        if (probeRect.right > fullWidth) fullWidth = probeRect.right;
+      }
       const parseColor = value => {
         if (!value || value === 'transparent') return null;
         const clamp = channel => Math.max(0, Math.min(1, channel));
@@ -189,6 +188,10 @@
         const stroke = [border.top, border.right, border.bottom, border.left].find(side => side.width) || { width: 0, color: null };
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
         const actionKey = element.getAttribute('data-c2figma-action-key');
+        // Grow the box a scrollbar clips (data only, the live element is never touched) so the rows
+        // read above are not orphaned outside a frame too short to hold them.
+        const scrollableY = (style.overflowY === 'auto' || style.overflowY === 'scroll') && element.scrollHeight > element.clientHeight + 1;
+        const scrollableX = (style.overflowX === 'auto' || style.overflowX === 'scroll') && element.scrollWidth > element.clientWidth + 1;
         nodes.push({
           id,
           parentId: parent ? ids.get(parent) : null,
@@ -196,8 +199,8 @@
           name: nameForElement(element),
           x: rect.left,
           y: rect.top,
-          width: rect.width,
-          height: rect.height,
+          width: scrollableX ? Math.max(rect.width, element.scrollWidth) : rect.width,
+          height: scrollableY ? Math.max(rect.height, element.scrollHeight) : rect.height,
           fill: parseColor(style.backgroundColor),
           stroke: stroke.color,
           strokeWidth: stroke.width,
@@ -205,7 +208,7 @@
           radius,
           position: style.position,
           zIndex: style.zIndex,
-          overflow: style.overflow,
+          overflow: (scrollableY || scrollableX) ? 'visible' : style.overflow,
           opacity: Number(style.opacity) || 1,
           text: '',
           fontSize: number(style.fontSize),
@@ -281,8 +284,6 @@
     } catch (error) {
       if (!token) throw error;
       parent.postMessage({ type: 'html-figma-scene-error', token, message: error.message }, '*');
-    } finally {
-      scrollRestores.forEach(([element, cssText]) => { element.style.cssText = cssText; });
     }
   }
 

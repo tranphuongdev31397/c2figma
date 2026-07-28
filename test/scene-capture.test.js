@@ -55,7 +55,7 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
 // child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
 // backdrop: the dialog's white sheet vanished and the page showed through its body.
-const fakeDocument = (elements, animations = [], documentElement = { scrollHeight: 900, scrollWidth: 1440 }) => {
+const fakeDocument = (elements, animations = []) => {
   const styles = new Map();
   const rects = new Map();
   for (const element of elements) {
@@ -76,19 +76,17 @@ const fakeDocument = (elements, animations = [], documentElement = { scrollHeigh
     });
     rects.set(element, element.rect || { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 });
     element.getBoundingClientRect = () => rects.get(element);
-    element.style = element.style || { cssText: '', setProperty(prop, value) { this[prop] = value; } };
   }
   return {
-    documentElement,
     querySelectorAll: () => elements,
     getAnimations: () => animations,
     getComputedStyle: element => styles.get(element)
   };
 };
 
-const runSerialize = (elements, animations, documentElement) => {
+const runSerialize = (elements, animations) => {
   const body = source.match(/\n {2}function serializeScene\([\s\S]*?\n {2}\}\n/)[0];
-  const dom = fakeDocument(elements, animations, documentElement);
+  const dom = fakeDocument(elements, animations);
   const scope = {
     document: dom,
     getComputedStyle: dom.getComputedStyle,
@@ -114,28 +112,28 @@ test('drops the whole subtree of a layer faded to nothing, not just that layer',
 
 // A fixed-height list panel with its own scrollbar (overflow-y:auto) hid every row past its
 // clientHeight from getBoundingClientRect, same as a page that never scrolled there — an invoice
-// list showing 8 of 12 rows lost the last 4 to this, not to any dedup logic.
-test('captures rows a fixed-height scrollable panel would otherwise clip, then restores its style', () => {
-  const relaxCalls = [];
+// list showing 8 of 12 rows lost the last 4 to this, not to any dedup logic. Forcing overflow:visible
+// on the live DOM to read past it once reflowed everything downstream (table columns, sticky
+// footers) into an overlapping mess; growing the box in the captured data instead never touches
+// the live layout, so nothing else on the page can shift.
+test('grows a fixed-height scrollable panel to fit rows it would otherwise clip', () => {
   const panel = {
     tagName: 'DIV', attributes: { class: 'invoice-list' }, parentElement: null,
-    overflowY: 'auto', scrollHeight: 600, clientHeight: 200,
-    style: { cssText: 'overflow-y:auto;height:200px', setProperty(prop, value) { relaxCalls.push([prop, value]); } }
+    overflowY: 'auto', scrollHeight: 600, clientHeight: 200
   };
   const belowFold = {
     tagName: 'DIV', attributes: { class: 'row-12' }, parentElement: panel,
     rect: { left: 0, top: 950, right: 100, bottom: 1000, width: 100, height: 50 }
   };
-  const originalCssText = panel.style.cssText;
 
-  const result = runSerialize([panel, belowFold], [], { scrollHeight: 1200, scrollWidth: 1440 });
+  const result = runSerialize([panel, belowFold]);
   const names = result.nodes.map(node => node.name);
+  const panelNode = result.nodes.find(node => /invoice-list/.test(node.name));
 
-  assert.ok(relaxCalls.some(([prop, value]) => prop === 'overflow-y' && value === 'visible'),
-    'the scrollable panel is un-clipped before measuring');
-  assert.equal(result.viewport.height, 1200, "the document is really 1200px tall, not the iframe's fixed 900px");
+  assert.equal(result.viewport.height, 1000, 'the true extent comes from the rows themselves, not the fixed 900px iframe');
   assert.ok(names.some(name => /row-12/.test(name)), 'a row past the original 900px cutoff is still captured');
-  assert.equal(panel.style.cssText, originalCssText, "the panel's clip is restored after measuring");
+  assert.equal(panelNode.height, 600, "the panel's own box grows to its scrollHeight so the row is not orphaned outside it");
+  assert.equal(panelNode.overflow, 'visible', 'the panel no longer clips what it now fully contains');
 });
 
 test('re-checks for animations that only start after the first look', () => {
@@ -272,7 +270,7 @@ test('preserves positioned layers for renderer stacking', () => {
 });
 
 test('captures CSS overflow so Figma does not over-clip text', () => {
-  assert.match(source, /overflow: style\.overflow/);
+  assert.match(source, /style\.overflow/);
 });
 
 test('names element layers with stable semantic names and indexes', () => {
