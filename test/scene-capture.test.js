@@ -67,7 +67,7 @@ const fakeDocument = (elements, animations = []) => {
       display: 'block', visibility: 'visible',
       // read late: an animation that lands changes it between getAnimations() and the style read
       get opacity() { return String(element.opacity ?? 1); },
-      position: element.position || 'static', zIndex: 'auto', overflow: 'visible',
+      position: element.position || 'static', zIndex: 'auto', overflow: element.overflow || 'visible',
       overflowY: element.overflowY || 'visible', overflowX: element.overflowX || 'visible',
       backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(0, 0, 0)', fontSize: '14px', fontWeight: '400',
       borderTopWidth: '0px', borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
@@ -111,15 +111,16 @@ test('drops the whole subtree of a layer faded to nothing, not just that layer',
 });
 
 // A fixed-height list panel with its own scrollbar (overflow-y:auto) hid every row past its
-// clientHeight from getBoundingClientRect, same as a page that never scrolled there — an invoice
-// list showing 8 of 12 rows lost the last 4 to this, not to any dedup logic. Forcing overflow:visible
-// on the live DOM to read past it once reflowed everything downstream (table columns, sticky
-// footers) into an overlapping mess; growing the box in the captured data instead never touches
-// the live layout, so nothing else on the page can shift.
-test('grows a fixed-height scrollable panel to fit rows it would otherwise clip', () => {
+// clientHeight from the capture — an invoice list showing 8 of 12 rows lost the last 4 to the fixed
+// viewport bound, not to any dedup logic. Widening that bound captures them, but the frames must
+// still be drawn exactly as measured: growing the panel to its scrollHeight and forcing
+// overflow:visible bought a tall band of whitespace and threw away the clip that made the design
+// read correctly. Capture more, draw the same — unchecking "Clip content" in Figma reveals the rest.
+test('captures rows a scrollable panel clips without resizing or un-clipping it', () => {
   const panel = {
     tagName: 'DIV', attributes: { class: 'invoice-list' }, parentElement: null,
-    overflowY: 'auto', scrollHeight: 600, clientHeight: 200
+    overflowY: 'auto', overflow: 'auto', scrollHeight: 600, clientHeight: 200,
+    rect: { left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200 }
   };
   const belowFold = {
     tagName: 'DIV', attributes: { class: 'row-12' }, parentElement: panel,
@@ -130,10 +131,12 @@ test('grows a fixed-height scrollable panel to fit rows it would otherwise clip'
   const names = result.nodes.map(node => node.name);
   const panelNode = result.nodes.find(node => /invoice-list/.test(node.name));
 
-  assert.equal(result.viewport.height, 1000, 'the true extent comes from the rows themselves, not the fixed 900px iframe');
-  assert.ok(names.some(name => /row-12/.test(name)), 'a row past the original 900px cutoff is still captured');
-  assert.equal(panelNode.height, 600, "the panel's own box grows to its scrollHeight so the row is not orphaned outside it");
-  assert.equal(panelNode.overflow, 'visible', 'the panel no longer clips what it now fully contains');
+  assert.ok(names.some(name => /row-12/.test(name)), 'a row past the 900px viewport cutoff is captured');
+  assert.equal(result.viewport.width, 1440);
+  assert.equal(result.viewport.height, 900,
+    'the frame stays the real viewport — a taller one is just whitespace under the design');
+  assert.equal(panelNode.height, 200, 'the panel keeps its measured height rather than growing to scrollHeight');
+  assert.equal(panelNode.overflow, 'auto', 'the panel keeps clipping, so the captured rows hide until Clip content is unchecked');
 });
 
 test('re-checks for animations that only start after the first look', () => {
@@ -383,37 +386,30 @@ test('filters decorative candidates from action discovery', () => {
   assert.match(source, /role.*presentation.*none/);
 });
 
-// A 12-row invoice list only differs row-to-row by data (customer, amount) — exploring every row
-// paid for one near-duplicate state per row. Sampling one per repeated sibling group keeps the one
-// genuinely different action (the filter pill) without the 8 duplicate detail-panel captures.
-test('samples one action per repeated sibling group instead of exploring every row', () => {
+// Collapsing repeated siblings by tag+class to dodge duplicate states cost real coverage instead: a
+// tab strip is five buttons that share a parent, a tag and a class and differ only by which one
+// carries `active`, so four of the five tabs — four distinct screens — stopped being explored at all.
+// Structure cannot tell a repeated data row from a tab; discovery must keep every sibling.
+test('keeps every sibling action, including tabs that differ only by a state class', () => {
   const body = source.match(/\n {2}function interactionToolkit\([\s\S]*?\n {2}\}\n/)[0]
     + source.match(/\n {2}function actionKeyFor\([\s\S]*?\n {2}\}\n/)[0];
-  const rowParent = { tagName: 'TBODY' };
-  const makeElement = (overrides) => ({
-    tagName: 'TR', className: 'invoice-row', parentElement: rowParent,
-    disabled: false, textContent: 'row',
-    getAttribute: () => null, hasAttribute: () => false, setAttribute() {},
-    getBoundingClientRect: () => ({ width: 100, height: 40, right: 100, bottom: 40 }),
-    ...overrides
+  const strip = { tagName: 'DIV' };
+  const tab = (label, className) => ({
+    tagName: 'BUTTON', className, parentElement: strip, disabled: false, textContent: label,
+    getAttribute: () => null, setAttribute() {},
+    getBoundingClientRect: () => ({ width: 80, height: 32, right: 80, bottom: 32 })
   });
-  const rows = [makeElement({ textContent: 'row-1' }), makeElement({ textContent: 'row-2' }), makeElement({ textContent: 'row-3' })];
-  const filterPill = makeElement({ tagName: 'BUTTON', className: 'filter-pill', parentElement: { tagName: 'DIV' }, textContent: 'Đã phát hành' });
-  const forcedRow = makeElement({ textContent: 'row-forced' });
-  forcedRow.hasAttribute = name => name === 'data-c2figma-force-explore';
-  const elements = [...rows, filterPill, forcedRow];
+  const tabs = [tab('Tất cả', 'tab active'), tab('Hỗ trợ', 'tab'), tab('Trợ lý', 'tab'), tab('Hệ thống', 'tab'), tab('Đơn hàng', 'tab')];
   const scope = {
-    document: { querySelectorAll: () => elements },
+    document: { querySelectorAll: () => tabs },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     Set, Map
   };
   vm.runInNewContext(body + '\nresult = interactionToolkit(actionKeyFor, 0, 0).discover();', scope);
 
-  // spread into a plain array first — the vm-context array's species otherwise trips
-  // assert's cross-realm check even though every element below is reference-identical.
-  const kept = [...scope.result].map(action => action.element);
-  assert.deepEqual(kept, [rows[0], filterPill, forcedRow],
-    'the first row stands in for its group, the unrelated pill stays, and an opted-out element always stays');
+  assert.deepEqual([...scope.result].map(action => action.label),
+    ['Tất cả', 'Hỗ trợ', 'Trợ lý', 'Hệ thống', 'Đơn hàng'],
+    'every tab is its own screen, however alike the markup looks');
 });
 
 test('filters external navigation schemes while allowing hash links', () => {

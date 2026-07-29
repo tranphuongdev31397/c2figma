@@ -94,12 +94,12 @@
         }
       }
       const ignored = new Set(['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'TEMPLATE']);
-      // A fixed-height panel with its own scrollbar (overflow:auto/scroll) still lays its overflowing
-      // rows out at their true position — getBoundingClientRect keeps reporting it even though the
-      // panel's own CSS clips it from view. Forcing overflow:visible on the live DOM to read that
-      // position used to work but reflowed everything downstream of it (table columns, sticky
-      // headers/footers) into a different, sometimes overlapping, layout. Reading the true extent
-      // instead — without touching a single style — captures the same rows with none of that risk.
+      // A fixed-height panel with its own scrollbar still lays its overflowing rows out at their true
+      // position; only the fixed viewport bound below dropped them, so widen that bound alone. What
+      // is captured grows — every clipped row becomes a real layer — while nothing about how it is
+      // drawn changes: the frames keep their measured size and their CSS overflow, so Figma clips
+      // exactly like the browser did and unchecking "Clip content" reveals the rest. Growing frames
+      // or forcing overflow:visible here instead only bought whitespace and lost the clip.
       let fullHeight = height;
       let fullWidth = width;
       for (const probe of document.querySelectorAll('*')) {
@@ -188,10 +188,6 @@
         const stroke = [border.top, border.right, border.bottom, border.left].find(side => side.width) || { width: 0, color: null };
         const radius = Math.max(number(style.borderTopLeftRadius), number(style.borderTopRightRadius), number(style.borderBottomRightRadius), number(style.borderBottomLeftRadius));
         const actionKey = element.getAttribute('data-c2figma-action-key');
-        // Grow the box a scrollbar clips (data only, the live element is never touched) so the rows
-        // read above are not orphaned outside a frame too short to hold them.
-        const scrollableY = (style.overflowY === 'auto' || style.overflowY === 'scroll') && element.scrollHeight > element.clientHeight + 1;
-        const scrollableX = (style.overflowX === 'auto' || style.overflowX === 'scroll') && element.scrollWidth > element.clientWidth + 1;
         nodes.push({
           id,
           parentId: parent ? ids.get(parent) : null,
@@ -199,8 +195,8 @@
           name: nameForElement(element),
           x: rect.left,
           y: rect.top,
-          width: scrollableX ? Math.max(rect.width, element.scrollWidth) : rect.width,
-          height: scrollableY ? Math.max(rect.height, element.scrollHeight) : rect.height,
+          width: rect.width,
+          height: rect.height,
           fill: parseColor(style.backgroundColor),
           stroke: stroke.color,
           strokeWidth: stroke.width,
@@ -208,7 +204,7 @@
           radius,
           position: style.position,
           zIndex: style.zIndex,
-          overflow: (scrollableY || scrollableX) ? 'visible' : style.overflow,
+          overflow: style.overflow,
           opacity: Number(style.opacity) || 1,
           text: '',
           fontSize: number(style.fontSize),
@@ -274,7 +270,7 @@
         }
       }
 
-      const scene = { version: 1, viewport: { width: fullWidth, height: fullHeight }, nodes };
+      const scene = { version: 1, viewport: { width, height }, nodes };
       if (!token) return scene;
       parent.postMessage({
         type: 'html-figma-scene',
@@ -311,7 +307,6 @@
     const discover = () => {
       const selectors = 'button,a,summary,select,input,textarea,[role="button"],[aria-expanded],[aria-haspopup],[data-action],[data-state],[onclick],[style*="cursor: pointer"]';
       const seen = new Set();
-      const siblingGroups = new Map();
       return [...document.querySelectorAll(selectors)].filter(element => {
         if (seen.has(element) || !visible(element) || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
         const role = (element.getAttribute('role') || '').toLowerCase();
@@ -319,18 +314,6 @@
         const href = element.getAttribute('href') || '';
         if (element.tagName === 'A' && !href.startsWith('#') && /^(?:https?|ftp|data|javascript|mailto|tel):/i.test(element.href)) return false;
         seen.add(element);
-        return true;
-      }).filter(element => {
-        // ponytail: repeated siblings (invoice rows, filter pills, checkboxes) render near-identical
-        // states differing only by data, so sample one per group instead of one capture per repeat.
-        // Upgrade path: mark an element data-c2figma-force-explore if a group ever needs full coverage.
-        if (element.hasAttribute('data-c2figma-force-explore')) return true;
-        const className = typeof element.className === 'string' ? element.className : '';
-        const signature = element.tagName + '|' + className;
-        let bySignature = siblingGroups.get(element.parentElement);
-        if (!bySignature) { bySignature = new Set(); siblingGroups.set(element.parentElement, bySignature); }
-        if (bySignature.has(signature)) return false;
-        bySignature.add(signature);
         return true;
       }).map((element, index) => {
         const key = actionKeyFor(element, index + 1);
