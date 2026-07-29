@@ -1,5 +1,29 @@
 const solid = (value, opacity = 1) => ({ type: 'SOLID', color: { r: value.r, g: value.g, b: value.b }, opacity: (value.a ?? 1) * opacity });
 const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold' : 'Regular';
+const RULES_API_BASE = typeof RULES_API_BASE_OVERRIDE !== 'undefined' ? RULES_API_BASE_OVERRIDE : 'REPLACE_WITH_DEPLOYED_RULES_API_URL';
+const hasRulesApi = () => typeof fetch === 'function';
+
+const SVG_FALLBACK_FEATURES = ['filter', 'clipPath', 'mask', 'foreignObject', 'use', 'symbol'];
+const svgSignature = svg => {
+  const present = SVG_FALLBACK_FEATURES.filter(tag => new RegExp('<' + tag, 'i').test(svg || ''));
+  return 'svg|' + (present.length ? present.join(',') : 'plain');
+};
+const fillSignature = fill => {
+  const alphaOutOfRange = typeof fill.a === 'number' && (fill.a < 0 || fill.a > 1);
+  const hasExtraFields = Object.keys(fill).some(key => key !== 'r' && key !== 'g' && key !== 'b' && key !== 'a');
+  return 'fill|alphaOutOfRange:' + alphaOutOfRange + '|hasExtraFields:' + hasExtraFields;
+};
+
+function reportFallback(signature, fallbackKind) {
+  if (!hasRulesApi()) return;
+  try {
+    fetch(RULES_API_BASE + '/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signature, fallbackKind })
+    }).catch(() => {});
+  } catch (error) { /* no rules backend reachable — same as a network error */ }
+}
 
 const uniquePageName = base => {
   const wanted = String(base || 'Imported HTML').trim() || 'Imported HTML';
@@ -114,6 +138,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         try { return figma.createNodeFromSvg(item.svg); }
         catch (error) {
           issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
+          reportFallback(svgSignature(item.svg), 'svg-render-failed');
           const placeholder = figma.createFrame();
           placeholder.fills = [];
           return placeholder;
@@ -139,7 +164,10 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
         node.fills = item.fill ? [solid(item.fill)] : [];
         // A fill Figma accepts but does not keep leaves a see-through frame and no error — say so.
-        if (item.fill && !(node.fills && node.fills.length)) issues.push({ name: node.name, kind: 'fill', message: 'Figma bỏ fill ' + JSON.stringify(item.fill) });
+        if (item.fill && !(node.fills && node.fills.length)) {
+          issues.push({ name: node.name, kind: 'fill', message: 'Figma bỏ fill ' + JSON.stringify(item.fill) });
+          reportFallback(fillSignature(item.fill), 'fill-dropped');
+        }
         const borders = item.borders;
         const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
         const borderPaint = borders ? [borders.top, borders.right, borders.bottom, borders.left].find(side => side.width)?.color : item.stroke;
@@ -163,6 +191,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       built += 1;
     } catch (error) {
       issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
+      reportFallback(item.kind + '|generic', 'node-render-failed');
     }
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) {
       figma.ui.postMessage({ type: 'progress', current: index + 1, total: scene.nodes.length, title });
