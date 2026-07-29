@@ -212,6 +212,14 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
   for (const transition of transitions || []) {
     const key = transitionKey(transition);
     if (done && done.has(key)) continue;
+    // A click that lands back where it started — a tab already selected, a toggle opened and closed —
+    // is a link from a frame to itself. Figma rejects those, and every skipped link in a real run was
+    // one: navigating to the frame you are already on is nothing to prototype, so drop it silently
+    // rather than reporting it as a link that was lost.
+    if (transition.from === transition.to) {
+      if (done) done.add(key);
+      continue;
+    }
     const source = renderedStates.get(transition.from);
     const destination = renderedStates.get(transition.to);
     const sourceNode = source?.actionNodes.get(transition.actionKey);
@@ -243,7 +251,8 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
       if (done) done.add(key);
     } catch (error) {
       skipped += 1;
-      note(transition, 'Figma từ chối reaction: ' + error.message);
+      // Figma throws things that are not Errors, and "undefined" told a whole run's log nothing.
+      note(transition, 'Figma từ chối reaction: ' + (error?.message || String(error)));
       if (done) done.add(key);
     }
   }

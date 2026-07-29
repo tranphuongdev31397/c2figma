@@ -480,24 +480,57 @@
   // which cost a run whole duplicate states — an eight-minute capture came back with six copies of
   // its own home screen:
   //   · a relative timestamp ticks as the run goes ("2 phút" becomes "15 phút"), so digits collapse
-  //   · a re-laid-out page lands a fraction off, so bounds snap to a 2px grid
   //   · a text box is only as wide as what it says, so a text run counts by what it says and which
   //     line it sits on, never by a width its own content decides
-  // Different wording still parts two states. Different numbers no longer do, which is what a design
-  // file wants from a list that changes nothing but its data.
+  // This one still answers a strict question — has the reused iframe returned to its baseline — where
+  // a false "no" only costs a reload. Deciding whether two screens are the same screen is a different
+  // question with a different answer; sameScreen below is the one that gets asked that.
   function sceneFingerprint(scene) {
-    const snap = value => Math.round(value / 2) * 2;
     return JSON.stringify(scene.nodes.map(node => {
       const text = (node.text || '').replace(/\d+/g, '#');
-      if (node.kind === 'text') return { kind: 'text', text, line: Math.round(node.y / 4) * 4 };
+      if (node.kind === 'text') return { kind: 'text', text, line: Math.round(node.y) };
       return {
         kind: node.kind,
-        bounds: [node.x, node.y, node.width, node.height].map(snap),
+        bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value)),
         text,
         fill: node.fill,
         stroke: node.stroke
       };
     }));
+  }
+
+  // Whether two captures are the same screen is a question about closeness, and an exact hash cannot
+  // ask it: measured against a real run, revisiting a screen moved a bold-to-normal label by 1.25px
+  // and shifted its neighbour by 0.1px, which was enough to keep six copies of one home screen.
+  // Snapping to a grid made it worse rather than better — 300.9 and 301.1 are a fifth of a pixel
+  // apart and land on opposite sides of every grid line. So compare with a tolerance instead.
+  //
+  // Geometry gets 2px of slack. Everything a designer would actually see a difference in — the
+  // wording, the colours, the weight — has to match exactly, which is what keeps the selected tab
+  // (heavier, greener, and 1.25px wider) a state of its own rather than a rounding error.
+  const SAME_SCREEN_SLACK = 2;
+  function screenDifference(one, two) {
+    if (one.nodes.length !== two.nodes.length) return 'số node: ' + one.nodes.length + ' vs ' + two.nodes.length;
+    const exact = node => JSON.stringify([
+      node.kind, (node.text || '').replace(/\d+/g, '#'), node.fill, node.stroke, node.color,
+      node.fontWeight, node.fontSize, node.opacity
+    ]);
+    for (let index = 0; index < one.nodes.length; index += 1) {
+      const here = one.nodes[index];
+      const there = two.nodes[index];
+      const at = ' @' + (here.name || here.kind) + ' #' + index;
+      if (exact(here) !== exact(there)) {
+        const keys = ['kind', 'text', 'fill', 'stroke', 'color', 'fontWeight', 'fontSize', 'opacity'];
+        const key = keys.find(name => JSON.stringify(here[name]) !== JSON.stringify(there[name])) || 'kiểu dáng';
+        return key + ': ' + String(JSON.stringify(here[key])).slice(0, 24) + ' vs ' + String(JSON.stringify(there[key])).slice(0, 24) + at;
+      }
+      for (const key of ['x', 'y', 'width', 'height']) {
+        if (Math.abs((here[key] || 0) - (there[key] || 0)) > SAME_SCREEN_SLACK) {
+          return key + ': ' + Math.round(here[key]) + ' vs ' + Math.round(there[key]) + at;
+        }
+      }
+    }
+    return null;
   }
 
   // ponytail: depth is the real ceiling — it bounds how many paths run, and paths are what cost time.
@@ -618,7 +651,6 @@
 
     return (async () => {
       const graph = { version: 2, viewport: { width: settings.width, height: settings.height }, states: [], transitions: [] };
-      const fingerprintToState = new Map();
       const transitionKeys = new Set();
       // most paths dedupe into a state that already exists, so state count alone looks frozen for
       // long stretches; report attempted paths too.
@@ -636,31 +668,22 @@
       catch (error) { runner.dispose(); throw error; }
       if (!baseline) { runner.dispose(); throw new Error('Không dựng được layout gốc.'); }
       const addState = async (actionPath, result, label) => {
-        const fingerprint = sceneFingerprint(result.scene);
-        let state = fingerprintToState.get(fingerprint);
+        // Same node count first: it rules out almost every state for the price of one integer, and
+        // the states that survive it are the only ones worth walking node by node.
+        const sized = graph.states.filter(other => other.scene.nodes.length === result.scene.nodes.length);
+        let state = sized.find(other => !screenDifference(result.scene, other.scene));
         if (!state) {
           state = { id: 'state-' + String(graph.states.length).padStart(2, '0'), label, actionPath, scene: result.scene };
-          fingerprintToState.set(fingerprint, state);
           graph.states.push(state);
           if (onState) await onState(state, graph);
-          // A state kept for a difference too small to see is indistinguishable in the log from a
-          // real one — the run that showed six copies of one screen looked, line by line, correct.
-          // Name the nearest state of the same size and the first node the two disagree on, so an
-          // over-eager fingerprint is something the log shows rather than something it hides.
-          if (settings.onNotice) {
-            const twin = graph.states.find(other => other !== state && other.scene.nodes.length === result.scene.nodes.length);
-            if (twin) {
-              const differing = result.scene.nodes.findIndex((node, index) => {
-                const against = twin.scene.nodes[index];
-                return !against || JSON.stringify([node.kind, node.text, Math.round(node.x), Math.round(node.y)])
-                  !== JSON.stringify([against.kind, against.text, Math.round(against.x), Math.round(against.y)]);
-              });
-              const node = differing >= 0 ? result.scene.nodes[differing] : null;
-              settings.onNotice({
-                type: 'near-duplicate', state: state.id, twin: twin.id, nodes: result.scene.nodes.length,
-                differsAt: node ? (node.name || node.kind) + ' “' + String(node.text || '').slice(0, 30) + '”' : 'không tìm ra node khác nhau'
-              });
-            }
+          // A state kept apart for a difference too small to see reads, line by line, exactly like a
+          // real one — which is how a run kept six copies of one screen and looked correct doing it.
+          // So whenever a state is kept next to one the same size, the log says what parted them.
+          if (settings.onNotice && sized.length) {
+            settings.onNotice({
+              type: 'near-duplicate', state: state.id, twin: sized[0].id, nodes: result.scene.nodes.length,
+              differsAt: screenDifference(result.scene, sized[0].scene) || 'không rõ'
+            });
           }
         } else if (settings.onNotice) {
           settings.onNotice({ type: 'deduped', into: state.id, actionPath, label });

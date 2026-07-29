@@ -52,31 +52,44 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
   );
 });
 
-// An 8-minute run came back with six copies of its own home screen, and four of one tab: every
-// revisit fingerprinted as new because the page's relative timestamps had ticked on and its layout
-// landed a fraction of a pixel off. Both are the same screen; only wording and colour are not.
-test('fingerprints a screen the same however long the run has been going', () => {
-  const { sceneFingerprintFor } = load();
-  const screen = (stamp, drift) => ({ nodes: [
-    { kind: 'box', x: 10 + drift, y: 10, width: 300, height: 60, fill: { r: 1, g: 1, b: 1, a: 1 }, stroke: null },
-    { kind: 'text', x: 12, y: 20, width: stamp.length * 7, height: 16, text: stamp },
-    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Trần Thị Bích' }
-  ] });
+// An 8-minute run kept six copies of its own home screen and four of one tab, because every revisit
+// differed from the original by a fraction of a pixel: a label going from bold back to normal is
+// 1.25px narrower and nudges its neighbour 0.1px. An exact hash cannot express "close enough", and
+// snapping to a grid made it worse — 300.9 and 301.1 are a fifth of a pixel apart and land either
+// side of every grid line. What must NOT be forgiven is anything a designer would see: the selected
+// tab is heavier, greener and wider all at once, and stays a state of its own.
+test('treats a screen revisited a pixel off as the same screen, but not a restyled one', () => {
+  const source = fs.readFileSync(require.resolve('../web/scene-capture.js'), 'utf8');
+  const body = source.match(/\n {2}function screenDifference\([\s\S]*?\n {2}\}\n/)[0];
+  const scope = { JSON, Math, String, Number };
+  vm.runInNewContext('const SAME_SCREEN_SLACK = 2;' + body + '\nglobalThis.diff = screenDifference;', scope);
+  const node = overrides => ({
+    kind: 'box', name: 'tab', text: 'Tất cả', x: 24.86, y: 10, width: 53.72, height: 32,
+    fill: null, stroke: null, color: { r: 0, g: 0, b: 0, a: 1 }, fontWeight: 400, fontSize: 13, opacity: 1,
+    ...overrides
+  });
+  const same = (one, two) => scope.diff({ nodes: [one] }, { nodes: [two] }) === null;
 
-  assert.equal(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor(screen('15 phút', 0)),
-    'a timestamp that ticked mid-run is the same screen, not a new one');
-  assert.equal(sceneFingerprintFor(screen('2 phút', 0.4)), sceneFingerprintFor(screen('2 phút', 0.6)),
-    'a layout that landed a sub-pixel off is the same screen — whole-pixel rounding split these');
-  assert.notEqual(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor({ nodes: [
-    { kind: 'box', x: 10, y: 10, width: 300, height: 60, fill: { r: 1, g: 1, b: 1, a: 1 }, stroke: null },
-    { kind: 'text', x: 12, y: 20, width: 42, height: 16, text: '2 phút' },
-    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Nguyễn Minh Anh' }
-  ] }), 'different wording is still a different state');
-  assert.notEqual(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor({ nodes: [
-    { kind: 'box', x: 10, y: 10, width: 300, height: 60, fill: { r: 0.9, g: 1, b: 0.9, a: 1 }, stroke: null },
-    { kind: 'text', x: 12, y: 20, width: 42, height: 16, text: '2 phút' },
-    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Trần Thị Bích' }
-  ] }), 'a row that lit up when selected is still a different state');
+  assert.ok(same(node({ width: 53.72 }), node({ width: 52.47 })), 'a 1.25px reflow is the same screen');
+  assert.ok(same(node({ x: 24.86 }), node({ x: 24.75 })), 'so is a tenth of a pixel');
+  assert.ok(same(node({ text: '2 phút' }), node({ text: '15 phút' })), 'a timestamp that ticked mid-run is the same screen');
+  assert.ok(!same(node({ fontWeight: 600, width: 53.72 }), node({ fontWeight: 400, width: 52.47 })),
+    'the selected tab is heavier — that is a state, not a rounding error');
+  assert.ok(!same(node({ color: { r: 0, g: 0.5, b: 0.2, a: 1 } }), node({ color: { r: 0, g: 0, b: 0, a: 1 } })),
+    'and it is a different colour');
+  assert.ok(!same(node({ fill: null }), node({ fill: { r: 0.9, g: 1, b: 0.9, a: 1 } })), 'a row that lit up is a state');
+  assert.ok(!same(node({ text: 'Tất cả' }), node({ text: 'Hỗ trợ' })), 'different wording is a state');
+  assert.ok(!same(node({ x: 24 }), node({ x: 44 })), 'a real 20px move is a state');
+});
+
+// The fingerprint answers a different, stricter question — has the reused iframe returned to its
+// baseline — where a false "no" only costs a reload.
+test('fingerprints a baseline without letting a ticking timestamp count as drift', () => {
+  const { sceneFingerprintFor } = load();
+  const screen = stamp => ({ nodes: [{ kind: 'text', x: 12, y: 20, width: stamp.length * 7, height: 16, text: stamp }] });
+
+  assert.equal(sceneFingerprintFor(screen('2 phút')), sceneFingerprintFor(screen('15 phút')));
+  assert.notEqual(sceneFingerprintFor(screen('2 phút')), sceneFingerprintFor(screen('Hôm qua')));
 });
 
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
@@ -365,7 +378,7 @@ test('exposes the bounded interactive state graph contract', () => {
   assert.match(source, /transitions/);
   assert.match(source, /data-c2figma-action-key/);
   assert.match(source, /maxActionsPerState/);
-  assert.match(source, /fingerprintToState/);
+  assert.match(source, /screenDifference/);
 });
 
 // Discovery is what stamps data-c2figma-action-key onto the elements. Serializing before it ran left
