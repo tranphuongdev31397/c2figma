@@ -25,6 +25,25 @@ function reportFallback(signature, fallbackKind) {
   } catch (error) { /* no rules backend reachable — same as a network error */ }
 }
 
+const clampFill = fill => ({ r: fill.r, g: fill.g, b: fill.b, a: Math.max(0, Math.min(1, fill.a ?? 1)) });
+
+async function fetchKnownRules(signatures) {
+  const unique = [...new Set(signatures)];
+  if (!unique.length || !hasRulesApi()) return new Map();
+  try {
+    const response = await fetch(RULES_API_BASE + '/rules?signatures=' + encodeURIComponent(unique.join(',')));
+    if (!response.ok) return new Map();
+    const body = await response.json();
+    return new Map(
+      Object.entries(body.rules || {})
+        .filter(([, rule]) => rule)
+        .map(([signature, rule]) => [signature, rule.fallbackKind])
+    );
+  } catch (error) {
+    return new Map();
+  }
+}
+
 const uniquePageName = base => {
   const wanted = String(base || 'Imported HTML').trim() || 'Imported HTML';
   const names = new Set(figma.root.children.map(page => page.name));
@@ -122,6 +141,11 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
 
   await figma.setCurrentPageAsync(page);
   if (spot.section) await sectionLabel(page, spot, depth);
+  const rules = await fetchKnownRules(
+    scene.nodes
+      .filter(item => item.kind === 'svg' || item.fill)
+      .map(item => item.kind === 'svg' ? svgSignature(item.svg) : fillSignature(item.fill))
+  );
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
     try {
@@ -135,6 +159,12 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       const build = () => {
         if (item.kind === 'text') return figma.createText();
         if (item.kind !== 'svg') return figma.createFrame();
+        if (rules.get(svgSignature(item.svg)) === 'svg-render-failed') {
+          issues.push({ name: item.name || item.kind, kind: item.kind, message: 'SVG này đã biết trước không render được (bỏ qua sớm).' });
+          const placeholder = figma.createFrame();
+          placeholder.fills = [];
+          return placeholder;
+        }
         try { return figma.createNodeFromSvg(item.svg); }
         catch (error) {
           issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
@@ -162,9 +192,10 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       } else if (item.kind !== 'svg') {
         node.layoutMode = 'NONE';
         node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
-        node.fills = item.fill ? [solid(item.fill)] : [];
+        const fillValue = item.fill && rules.get(fillSignature(item.fill)) === 'fill-dropped' ? clampFill(item.fill) : item.fill;
+        node.fills = fillValue ? [solid(fillValue)] : [];
         // A fill Figma accepts but does not keep leaves a see-through frame and no error — say so.
-        if (item.fill && !(node.fills && node.fills.length)) {
+        if (fillValue && !(node.fills && node.fills.length)) {
           issues.push({ name: node.name, kind: 'fill', message: 'Figma bỏ fill ' + JSON.stringify(item.fill) });
           reportFallback(fillSignature(item.fill), 'fill-dropped');
         }

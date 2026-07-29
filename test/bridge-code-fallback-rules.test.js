@@ -117,3 +117,56 @@ test('renders normally with no rules backend configured (no fetch in the sandbox
   const issues = figma.messages.find(message => message.type === 'render-issues');
   assert.ok(issues, 'the missing-fetch case must still report the render issue exactly as before');
 });
+
+test('skips a known-bad SVG without calling createNodeFromSvg or re-reporting it', async () => {
+  const figma = makeFigma();
+  figma.createNodeFromSvg = () => { throw new Error('must not be called'); };
+  const fetchMock = makeFetchMock({ rules: { 'svg|plain': { signature: 'svg|plain', fallbackKind: 'svg-render-failed', hitCount: 3, firstSeen: 1, lastSeen: 2 } } });
+  run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
+  figma.ui.onmessage({
+    type: 'import', spec: { title: 'T' }, pageName: 'P',
+    scene: { version: 1, viewport: { width: 200, height: 200 }, nodes: [
+      { id: 'a', parentId: '__root__', kind: 'svg', name: 'icon', x: 0, y: 0, width: 10, height: 10, svg: '<svg/>' }
+    ] }
+  });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const reportCalls = fetchMock.calls.filter(call => call.init && call.init.method === 'POST');
+  assert.equal(reportCalls.length, 0, 'a known signature must not be re-reported');
+  const root = figma.root.children[0]?.children[0];
+  assert.ok(root, 'the state frame must still exist');
+});
+
+test('clamps a known-bad fill instead of losing it', async () => {
+  const figma = makeFigma();
+  const signature = 'fill|alphaOutOfRange:true|hasExtraFields:false';
+  const fetchMock = makeFetchMock({ rules: { [signature]: { signature, fallbackKind: 'fill-dropped', hitCount: 2, firstSeen: 1, lastSeen: 2 } } });
+  run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
+  figma.ui.onmessage({
+    type: 'import', spec: { title: 'T' }, pageName: 'P',
+    scene: { version: 1, viewport: { width: 200, height: 200 }, nodes: [
+      { id: 'a', parentId: '__root__', kind: 'frame', name: 'swatch', x: 0, y: 0, width: 10, height: 10, fill: { r: 0, g: 1, b: 0, a: 1.4 } }
+    ] }
+  });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const swatch = figma.root.children[0]?.children[0]?.children.find(child => child.name === 'swatch');
+  assert.ok(swatch, 'the swatch frame must exist');
+  assert.equal(swatch.fills.length, 1, 'the clamped fill must survive assignment instead of being dropped');
+  const reportCalls = fetchMock.calls.filter(call => call.init && call.init.method === 'POST');
+  assert.equal(reportCalls.length, 0, 'a known signature must not be re-reported');
+});
+
+test('fetches known rules once per state, not once per node', async () => {
+  const figma = makeFigma();
+  const fetchMock = makeFetchMock({ rules: {} });
+  run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
+  const nodes = Array.from({ length: 5 }, (_, index) => ({
+    id: 'n' + index, parentId: '__root__', kind: 'svg', name: 'icon' + index, x: 0, y: 0, width: 10, height: 10, svg: '<svg/>'
+  }));
+  figma.ui.onmessage({ type: 'import', spec: { title: 'T' }, pageName: 'P', scene: { version: 1, viewport: { width: 200, height: 200 }, nodes } });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const getCalls = fetchMock.calls.filter(call => !call.init || !call.init.method || call.init.method === 'GET');
+  assert.equal(getCalls.length, 1, 'must batch one GET for the whole state, not one per node');
+});
