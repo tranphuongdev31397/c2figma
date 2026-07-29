@@ -15,6 +15,16 @@ test('keeps captured text on one line when Figma font metrics are wider', () => 
   }
 });
 
+// Auto-growing every run kept single-line text single-line, but a run the page had already wrapped
+// was stretched back onto one line and spilled out of the bubble that was sized to hold two.
+test('re-wraps a run the page wrapped instead of stretching it onto one line', () => {
+  for (const file of ['../src/bridge-code.js', '../web/plugin-code.js']) {
+    const source = fs.readFileSync(require.resolve(file), 'utf8');
+    assert.match(source, /item\.lines > 1/, 'the wrapped case is told apart from the single-line one');
+    assert.match(source, /textAutoResize = 'HEIGHT'/, 'a wrapped run keeps its width and re-flows its height');
+  }
+});
+
 test('renders captured SVG layers through Figma SVG import', () => {
   for (const file of renderers) {
     assert.match(fs.readFileSync(require.resolve(file), 'utf8'), /createNodeFromSvg/);

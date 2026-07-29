@@ -52,6 +52,46 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
   );
 });
 
+// An 8-minute run kept six copies of its own home screen and four of one tab, because every revisit
+// differed from the original by a fraction of a pixel: a label going from bold back to normal is
+// 1.25px narrower and nudges its neighbour 0.1px. An exact hash cannot express "close enough", and
+// snapping to a grid made it worse — 300.9 and 301.1 are a fifth of a pixel apart and land either
+// side of every grid line. What must NOT be forgiven is anything a designer would see: the selected
+// tab is heavier, greener and wider all at once, and stays a state of its own.
+test('treats a screen revisited a pixel off as the same screen, but not a restyled one', () => {
+  const source = fs.readFileSync(require.resolve('../web/scene-capture.js'), 'utf8');
+  const body = source.match(/\n {2}function screenDifference\([\s\S]*?\n {2}\}\n/)[0];
+  const scope = { JSON, Math, String, Number };
+  vm.runInNewContext('const SAME_SCREEN_SLACK = 2;' + body + '\nglobalThis.diff = screenDifference;', scope);
+  const node = overrides => ({
+    kind: 'box', name: 'tab', text: 'Tất cả', x: 24.86, y: 10, width: 53.72, height: 32,
+    fill: null, stroke: null, color: { r: 0, g: 0, b: 0, a: 1 }, fontWeight: 400, fontSize: 13, opacity: 1,
+    ...overrides
+  });
+  const same = (one, two) => scope.diff({ nodes: [one] }, { nodes: [two] }) === null;
+
+  assert.ok(same(node({ width: 53.72 }), node({ width: 52.47 })), 'a 1.25px reflow is the same screen');
+  assert.ok(same(node({ x: 24.86 }), node({ x: 24.75 })), 'so is a tenth of a pixel');
+  assert.ok(same(node({ text: '2 phút' }), node({ text: '15 phút' })), 'a timestamp that ticked mid-run is the same screen');
+  assert.ok(!same(node({ fontWeight: 600, width: 53.72 }), node({ fontWeight: 400, width: 52.47 })),
+    'the selected tab is heavier — that is a state, not a rounding error');
+  assert.ok(!same(node({ color: { r: 0, g: 0.5, b: 0.2, a: 1 } }), node({ color: { r: 0, g: 0, b: 0, a: 1 } })),
+    'and it is a different colour');
+  assert.ok(!same(node({ fill: null }), node({ fill: { r: 0.9, g: 1, b: 0.9, a: 1 } })), 'a row that lit up is a state');
+  assert.ok(!same(node({ text: 'Tất cả' }), node({ text: 'Hỗ trợ' })), 'different wording is a state');
+  assert.ok(!same(node({ x: 24 }), node({ x: 44 })), 'a real 20px move is a state');
+});
+
+// The fingerprint answers a different, stricter question — has the reused iframe returned to its
+// baseline — where a false "no" only costs a reload.
+test('fingerprints a baseline without letting a ticking timestamp count as drift', () => {
+  const { sceneFingerprintFor } = load();
+  const screen = stamp => ({ nodes: [{ kind: 'text', x: 12, y: 20, width: stamp.length * 7, height: 16, text: stamp }] });
+
+  assert.equal(sceneFingerprintFor(screen('2 phút')), sceneFingerprintFor(screen('15 phút')));
+  assert.notEqual(sceneFingerprintFor(screen('2 phút')), sceneFingerprintFor(screen('Hôm qua')));
+});
+
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
 // child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
 // backdrop: the dialog's white sheet vanished and the page showed through its body.
@@ -59,7 +99,7 @@ const fakeDocument = (elements, animations = []) => {
   const styles = new Map();
   const rects = new Map();
   for (const element of elements) {
-    element.childNodes = [];
+    element.childNodes = element.childNodes || [];
     element.getAttribute = name => element.attributes?.[name] ?? null;
     element.closest = () => null;
     element.id = element.attributes?.id || '';
@@ -80,7 +120,26 @@ const fakeDocument = (elements, animations = []) => {
   return {
     querySelectorAll: () => elements,
     getAnimations: () => animations,
-    getComputedStyle: element => styles.get(element)
+    getComputedStyle: element => styles.get(element),
+    // A text node that wraps reports one rect per visual line and one union box for the whole run —
+    // the distinction the capture gets wrong is invisible unless the mock models both.
+    createRange: () => {
+      let target = null;
+      const lines = () => (target && target.lineRects) || [];
+      return {
+        selectNodeContents(node) { target = node; },
+        getClientRects: () => lines(),
+        getBoundingClientRect: () => {
+          const rects = lines();
+          if (!rects.length) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+          const left = Math.min(...rects.map(rect => rect.left));
+          const top = Math.min(...rects.map(rect => rect.top));
+          const right = Math.max(...rects.map(rect => rect.right));
+          const bottom = Math.max(...rects.map(rect => rect.bottom));
+          return { left, top, right, bottom, width: right - left, height: bottom - top };
+        }
+      };
+    }
   };
 };
 
@@ -137,6 +196,31 @@ test('captures rows a scrollable panel clips without resizing or un-clipping it'
     'the frame stays the real viewport — a taller one is just whitespace under the design');
   assert.equal(panelNode.height, 200, 'the panel keeps its measured height rather than growing to scrollHeight');
   assert.equal(panelNode.overflow, 'auto', 'the panel keeps clipping, so the captured rows hide until Clip content is unchecked');
+});
+
+// getClientRects() returns a rect per visual line, and a node per rect wrote the whole sentence once
+// per line: a wrapped chat bubble arrived in Figma with its text stamped twice, each copy stretched
+// onto a single line that spilled out of the bubble.
+test('captures a wrapped text run once, with the line count the renderer needs', () => {
+  const bubble = {
+    tagName: 'DIV', attributes: { class: 'bubble' }, parentElement: null,
+    rect: { left: 20, top: 20, right: 320, bottom: 76, width: 300, height: 56 },
+    childNodes: [{
+      nodeType: 3,
+      data: 'Dạ chào Bích! Shop còn hàng ạ, có đủ màu đen, nâu và kem. Bạn thích màu nào?',
+      lineRects: [
+        { left: 32, top: 28, right: 308, bottom: 46, width: 276, height: 18 },
+        { left: 32, top: 46, right: 190, bottom: 64, width: 158, height: 18 }
+      ]
+    }]
+  };
+
+  const texts = runSerialize([bubble]).nodes.filter(node => node.kind === 'text');
+
+  assert.equal(texts.length, 1, 'one node per run — a node per line stamped the sentence twice');
+  assert.equal(texts[0].lines, 2, 'the renderer has to know the page wrapped this run');
+  assert.equal(Math.round(texts[0].width), 276, 'the box spans the width the run wrapped inside');
+  assert.equal(Math.round(texts[0].height), 36, 'and the height of both its lines');
 });
 
 test('re-checks for animations that only start after the first look', () => {
@@ -294,7 +378,7 @@ test('exposes the bounded interactive state graph contract', () => {
   assert.match(source, /transitions/);
   assert.match(source, /data-c2figma-action-key/);
   assert.match(source, /maxActionsPerState/);
-  assert.match(source, /fingerprintToState/);
+  assert.match(source, /screenDifference/);
 });
 
 // Discovery is what stamps data-c2figma-action-key onto the elements. Serializing before it ran left

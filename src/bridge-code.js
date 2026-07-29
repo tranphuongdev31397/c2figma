@@ -196,7 +196,15 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         node.characters = item.text || '';
         node.fontSize = Math.max(1, item.fontSize || 14);
         node.fills = [solid(item.color || { r: .1, g: .1, b: .1 })];
-        node.textAutoResize = 'WIDTH_AND_HEIGHT';
+        // A run the page kept on one line stays on one line, however much wider Inter is than the
+        // page's own font. A run the page itself wrapped has to keep wrapping, so pin the width it
+        // wrapped inside and let Figma re-flow the height — left to grow, it overflows its bubble.
+        if (item.lines > 1) {
+          node.textAutoResize = 'HEIGHT';
+          node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height)));
+        } else {
+          node.textAutoResize = 'WIDTH_AND_HEIGHT';
+        }
       } else if (item.kind !== 'svg') {
         node.layoutMode = 'NONE';
         node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
@@ -263,9 +271,23 @@ const transitionKey = transition => [transition.from, transition.to, transition.
 async function applyTransitions(transitions, renderedStates, done, pending) {
   let applied = 0;
   let skipped = 0;
+  // A bare count says a prototype link was lost but never which one or why, and the four reasons
+  // want four different answers from whoever reads the log.
+  const reasons = [];
+  const note = (transition, reason) => {
+    if (reasons.length < 12) reasons.push(transition.from + '→' + transition.to + ' (' + transition.actionKey + '): ' + reason);
+  };
   for (const transition of transitions || []) {
     const key = transitionKey(transition);
     if (done && done.has(key)) continue;
+    // A click that lands back where it started — a tab already selected, a toggle opened and closed —
+    // is a link from a frame to itself. Figma rejects those, and every skipped link in a real run was
+    // one: navigating to the frame you are already on is nothing to prototype, so drop it silently
+    // rather than reporting it as a link that was lost.
+    if (transition.from === transition.to) {
+      if (done) done.add(key);
+      continue;
+    }
     const source = renderedStates.get(transition.from);
     const destination = renderedStates.get(transition.to);
     const sourceNode = source?.actionNodes.get(transition.actionKey);
@@ -273,6 +295,9 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
     if (pending && (!sourceNode || !destination?.root)) continue;
     if (!sourceNode || !destination?.root || !transitionTriggers.has(trigger)) {
       skipped += 1;
+      note(transition, !sourceNode ? 'layer của hành động không có trong state nguồn'
+        : !destination?.root ? 'state đích chưa dựng xong'
+        : 'trigger không hỗ trợ: ' + trigger);
       if (done) done.add(key);
       continue;
     }
@@ -294,12 +319,14 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
       if (done) done.add(key);
     } catch (error) {
       skipped += 1;
+      // Figma throws things that are not Errors, and "undefined" told a whole run's log nothing.
+      note(transition, 'Figma từ chối reaction: ' + (error?.message || String(error)));
       if (done) done.add(key);
     }
   }
   if (skipped) {
     figma.notify('Skipped ' + skipped + ' prototype transitions.', { error: true });
-    figma.ui.postMessage({ type: 'transition-skipped', skipped });
+    figma.ui.postMessage({ type: 'transition-skipped', skipped, reasons });
   }
   if (applied) figma.ui.postMessage({ type: 'transition-progress', applied });
   return { applied, skipped };
@@ -367,11 +394,12 @@ function reportStateError(state, error) {
   figma.ui.postMessage({ type: 'import-error', message: label + ': ' + error.message });
 }
 
+// ponytail: the plugin deliberately outlives its own import. Closing on success took the run log
+// down with it before anyone could read, let alone download, the layers it had to skip.
 function finishSession(current, standalone = false) {
   if (current.failed || (!standalone && current !== session)) return;
   figma.notify('Đã tạo design editable trong Figma.');
   figma.ui.postMessage({ type: 'imported', title: current.title, pageName: current.basePageName });
-  figma.closePlugin('Đã tạo design editable từ HTML.');
 }
 
 figma.showUI(__html__, { width: 720, height: 620 });
@@ -425,7 +453,6 @@ figma.ui.onmessage = message => {
       const rendered = await renderScene(message.scene, title, message.pageName || message.spec?.pageName || title);
       figma.notify('Đã tạo design editable trong Figma.');
       figma.ui.postMessage({ type: 'imported', title, pageName: rendered.pageName });
-      figma.closePlugin('Đã tạo design editable từ HTML.');
     } catch (error) {
       reportFatal(error);
     }

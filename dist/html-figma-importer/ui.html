@@ -88,6 +88,7 @@
         <a class="guide-link" href="/guide">Hướng dẫn sử dụng <span>↗</span></a>
         <div class="primary-actions">
           <button id="log-open" class="log-open" hidden>Log lỗi <span id="log-count">0</span></button>
+          <button id="reset" hidden>Làm mới</button>
           <a class="button install" data-install href="/downloads/html-figma-importer.zip" download>Cài plugin một lần</a>
           <button id="download" class="fallback" disabled>Tải theo HTML (.zip)</button>
         </div>
@@ -326,17 +327,23 @@
           range.selectNodeContents(child);
           const text = child.data.replace(/\s+/g, ' ').trim();
           if (payload(text)) continue;
-          for (const textRect of [...range.getClientRects()]) {
-            if (!text || textRect.width <= 0 || textRect.height <= 0) continue;
+          // getClientRects() returns one rect per visual line, so a node per rect wrote the whole
+          // sentence once per line — a wrapped chat bubble came out with its text stamped twice, each
+          // copy forced onto one line that overflowed the bubble. One node per run instead, boxed by
+          // the union of its lines, with the line count so the renderer knows to let Figma re-wrap.
+          const lineRects = [...range.getClientRects()].filter(line => line.width > 0 && line.height > 0);
+          const box = range.getBoundingClientRect();
+          if (text && lineRects.length) {
             nodes.push({
               id: 'n' + nodes.length,
               parentId: id,
               kind: 'text',
               name: 'Text / ' + text.slice(0, 40),
-              x: textRect.left,
-              y: textRect.top,
-              width: textRect.width,
-              height: textRect.height,
+              x: box.left,
+              y: box.top,
+              width: box.width,
+              height: box.height,
+              lines: lineRects.length,
               fill: null,
               stroke: null,
               strokeWidth: 0,
@@ -575,15 +582,62 @@
 
   // ponytail: no opacity and whole-pixel bounds on purpose. A modal caught mid-fade differs from the
   // same modal at rest only in those two, so keeping them splits one state into a state per frame.
+  //
+  // Three more things a screen revisited later differs by without being a different screen, each of
+  // which cost a run whole duplicate states — an eight-minute capture came back with six copies of
+  // its own home screen:
+  //   · a relative timestamp ticks as the run goes ("2 phút" becomes "15 phút"), so digits collapse
+  //   · a text box is only as wide as what it says, so a text run counts by what it says and which
+  //     line it sits on, never by a width its own content decides
+  // This one still answers a strict question — has the reused iframe returned to its baseline — where
+  // a false "no" only costs a reload. Deciding whether two screens are the same screen is a different
+  // question with a different answer; sameScreen below is the one that gets asked that.
   function sceneFingerprint(scene) {
-    return JSON.stringify(scene.nodes.map(node => ({
-      kind: node.kind,
-      bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value)),
-      text: node.text || '',
-      fill: node.fill,
-      stroke: node.stroke,
-      visibility: node.visibility !== false
-    })));
+    return JSON.stringify(scene.nodes.map(node => {
+      const text = (node.text || '').replace(/\d+/g, '#');
+      if (node.kind === 'text') return { kind: 'text', text, line: Math.round(node.y) };
+      return {
+        kind: node.kind,
+        bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value)),
+        text,
+        fill: node.fill,
+        stroke: node.stroke
+      };
+    }));
+  }
+
+  // Whether two captures are the same screen is a question about closeness, and an exact hash cannot
+  // ask it: measured against a real run, revisiting a screen moved a bold-to-normal label by 1.25px
+  // and shifted its neighbour by 0.1px, which was enough to keep six copies of one home screen.
+  // Snapping to a grid made it worse rather than better — 300.9 and 301.1 are a fifth of a pixel
+  // apart and land on opposite sides of every grid line. So compare with a tolerance instead.
+  //
+  // Geometry gets 2px of slack. Everything a designer would actually see a difference in — the
+  // wording, the colours, the weight — has to match exactly, which is what keeps the selected tab
+  // (heavier, greener, and 1.25px wider) a state of its own rather than a rounding error.
+  const SAME_SCREEN_SLACK = 2;
+  function screenDifference(one, two) {
+    if (one.nodes.length !== two.nodes.length) return 'số node: ' + one.nodes.length + ' vs ' + two.nodes.length;
+    const exact = node => JSON.stringify([
+      node.kind, (node.text || '').replace(/\d+/g, '#'), node.fill, node.stroke, node.color,
+      node.fontWeight, node.fontSize, node.opacity
+    ]);
+    for (let index = 0; index < one.nodes.length; index += 1) {
+      const here = one.nodes[index];
+      const there = two.nodes[index];
+      const at = ' @' + (here.name || here.kind) + ' #' + index;
+      if (exact(here) !== exact(there)) {
+        const keys = ['kind', 'text', 'fill', 'stroke', 'color', 'fontWeight', 'fontSize', 'opacity'];
+        const key = keys.find(name => JSON.stringify(here[name]) !== JSON.stringify(there[name])) || 'kiểu dáng';
+        return key + ': ' + String(JSON.stringify(here[key])).slice(0, 24) + ' vs ' + String(JSON.stringify(there[key])).slice(0, 24) + at;
+      }
+      for (const key of ['x', 'y', 'width', 'height']) {
+        if (Math.abs((here[key] || 0) - (there[key] || 0)) > SAME_SCREEN_SLACK) {
+          return key + ': ' + Math.round(here[key]) + ' vs ' + Math.round(there[key]) + at;
+        }
+      }
+    }
+    return null;
   }
 
   // ponytail: depth is the real ceiling — it bounds how many paths run, and paths are what cost time.
@@ -704,7 +758,6 @@
 
     return (async () => {
       const graph = { version: 2, viewport: { width: settings.width, height: settings.height }, states: [], transitions: [] };
-      const fingerprintToState = new Map();
       const transitionKeys = new Set();
       // most paths dedupe into a state that already exists, so state count alone looks frozen for
       // long stretches; report attempted paths too.
@@ -722,13 +775,25 @@
       catch (error) { runner.dispose(); throw error; }
       if (!baseline) { runner.dispose(); throw new Error('Không dựng được layout gốc.'); }
       const addState = async (actionPath, result, label) => {
-        const fingerprint = sceneFingerprint(result.scene);
-        let state = fingerprintToState.get(fingerprint);
+        // Same node count first: it rules out almost every state for the price of one integer, and
+        // the states that survive it are the only ones worth walking node by node.
+        const sized = graph.states.filter(other => other.scene.nodes.length === result.scene.nodes.length);
+        let state = sized.find(other => !screenDifference(result.scene, other.scene));
         if (!state) {
           state = { id: 'state-' + String(graph.states.length).padStart(2, '0'), label, actionPath, scene: result.scene };
-          fingerprintToState.set(fingerprint, state);
           graph.states.push(state);
           if (onState) await onState(state, graph);
+          // A state kept apart for a difference too small to see reads, line by line, exactly like a
+          // real one — which is how a run kept six copies of one screen and looked correct doing it.
+          // So whenever a state is kept next to one the same size, the log says what parted them.
+          if (settings.onNotice && sized.length) {
+            settings.onNotice({
+              type: 'near-duplicate', state: state.id, twin: sized[0].id, nodes: result.scene.nodes.length,
+              differsAt: screenDifference(result.scene, sized[0].scene) || 'không rõ'
+            });
+          }
+        } else if (settings.onNotice) {
+          settings.onNotice({ type: 'deduped', into: state.id, actionPath, label });
         }
         return state;
       };
@@ -870,7 +935,11 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
-      node.textAutoResize = 'WIDTH_AND_HEIGHT';
+      // A run the page kept on one line stays on one line, however much wider Inter is than the
+      // page's own font. A run the page itself wrapped has to keep wrapping, so pin the width it
+      // wrapped inside and let Figma re-flow the height — left to grow, it overflows its bubble.
+      if (item.lines > 1) { node.textAutoResize = 'HEIGHT'; node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height))); }
+      else node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
@@ -955,8 +1024,10 @@ async function boot() {
       const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
       const scene = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
       figma.notify('Đã tạo design editable trong Figma.');
+      // Stays open on purpose: this path has a UI, and closing it took the run log — the only record
+      // of the layers that had to be skipped — down before it could be read. The graph path above
+      // closes because it never shows one.
       post({type:'imported', title, pageName:scene.pageName});
-      figma.closePlugin('Đã tạo design editable từ HTML.');
     } catch (error) {
       figma.notify('Không thể tạo design: ' + error.message, {error:true});
       post({type:'error', message:error.message});
@@ -983,7 +1054,10 @@ setTimeout(boot, 0);`;
     $('log-open').addEventListener('click', () => { $('log-sheet').hidden = false; $('log-text').focus(); $('log-text').select(); });
     $('log-close').addEventListener('click', () => { $('log-sheet').hidden = true; });
     $('log-download').addEventListener('click', () => {
-      const blob = new Blob([logLines.join('\n')], { type: 'text/plain' });
+      // The log is almost entirely Vietnamese, and a plain text/plain blob left editors to guess the
+      // encoding — they guessed Latin-1 and "0 lỗi" came back as "0 lá»i". Declare UTF-8 and lead
+      // with a BOM, which is the part Windows and macOS editors actually read.
+      const blob = new Blob(['﻿' + logLines.join('\n')], { type: 'text/plain;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = 'html-figma-importer-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
@@ -1049,6 +1123,19 @@ setTimeout(boot, 0);`;
       if (inFigma) return;
       download();
     }
+    // The plugin no longer closes itself on success, so a finished run has to be cleared by hand to
+    // make room for the next file. The log survives on purpose — it is the run's only record, and it
+    // is usually read after the import, not during it.
+    function reset() {
+      selected = null;
+      $('summary').style.display = 'none';
+      $('page-name-field').hidden = true;
+      $('chips').innerHTML = '';
+      $('download').disabled = true;
+      $('reset').hidden = true;
+      $('status').textContent = 'Sẵn sàng cho file tiếp theo. Log lỗi của lần chạy trước vẫn giữ nguyên.';
+    }
+    $('reset').addEventListener('click', reset);
     async function start() {
       if (!selected || selected.started) return;
       selected.started=true;
@@ -1091,7 +1178,11 @@ setTimeout(boot, 0);`;
           +(degraded?' · '+degraded+' lần phải tải lại iframe':'')
           +(selected.directStarted?' — đang gửi sang Figma…':'…');
       };
-      const onNotice = notice => { if (notice.type === 'reuse-degraded') degraded = notice.degraded; };
+      const onNotice = notice => {
+        if (notice.type === 'reuse-degraded') degraded = notice.degraded;
+        if (notice.type === 'deduped') log('dedup · ' + JSON.stringify(notice.actionPath) + ' → ' + notice.into + ' (' + notice.label.slice(0, 30) + ')');
+        if (notice.type === 'near-duplicate') log('near-duplicate · ' + notice.state + ' vs ' + notice.twin + ' · cùng ' + notice.nodes + ' node · khác ở: ' + notice.differsAt);
+      };
       try {
         const graph=await captureStateGraph(html,{onProgress,onNotice,mode:$('mode').value},onState);
         if (selected.file !== file) return;
@@ -1137,7 +1228,8 @@ setTimeout(boot, 0);`;
         if (message.type === 'render-issues') log('render-issues · ' + message.title + ' · ' + message.total + ' layer: ' + message.issues.map(issue => issue.kind + ' "' + issue.name + '" → ' + issue.message).join(' | '));
         if (message.type === 'state-summary') log('rendered · ' + message.title + ' · ' + message.built + '/' + message.nodes + ' layer · ' + message.issues + ' lỗi');
         if (message.type === 'import-error' || message.type === 'error') log('render error: ' + message.message);
-        if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped);
+        if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped + (message.reasons?.length ? ' · ' + message.reasons.join(' | ') : ''));
+        if (message.type === 'imported') $('reset').hidden = false;
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'state-progress'
