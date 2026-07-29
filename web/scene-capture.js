@@ -475,15 +475,29 @@
 
   // ponytail: no opacity and whole-pixel bounds on purpose. A modal caught mid-fade differs from the
   // same modal at rest only in those two, so keeping them splits one state into a state per frame.
+  //
+  // Three more things a screen revisited later differs by without being a different screen, each of
+  // which cost a run whole duplicate states — an eight-minute capture came back with six copies of
+  // its own home screen:
+  //   · a relative timestamp ticks as the run goes ("2 phút" becomes "15 phút"), so digits collapse
+  //   · a re-laid-out page lands a fraction off, so bounds snap to a 2px grid
+  //   · a text box is only as wide as what it says, so a text run counts by what it says and which
+  //     line it sits on, never by a width its own content decides
+  // Different wording still parts two states. Different numbers no longer do, which is what a design
+  // file wants from a list that changes nothing but its data.
   function sceneFingerprint(scene) {
-    return JSON.stringify(scene.nodes.map(node => ({
-      kind: node.kind,
-      bounds: [node.x, node.y, node.width, node.height].map(value => Math.round(value)),
-      text: node.text || '',
-      fill: node.fill,
-      stroke: node.stroke,
-      visibility: node.visibility !== false
-    })));
+    const snap = value => Math.round(value / 2) * 2;
+    return JSON.stringify(scene.nodes.map(node => {
+      const text = (node.text || '').replace(/\d+/g, '#');
+      if (node.kind === 'text') return { kind: 'text', text, line: Math.round(node.y / 4) * 4 };
+      return {
+        kind: node.kind,
+        bounds: [node.x, node.y, node.width, node.height].map(snap),
+        text,
+        fill: node.fill,
+        stroke: node.stroke
+      };
+    }));
   }
 
   // ponytail: depth is the real ceiling — it bounds how many paths run, and paths are what cost time.
@@ -629,6 +643,27 @@
           fingerprintToState.set(fingerprint, state);
           graph.states.push(state);
           if (onState) await onState(state, graph);
+          // A state kept for a difference too small to see is indistinguishable in the log from a
+          // real one — the run that showed six copies of one screen looked, line by line, correct.
+          // Name the nearest state of the same size and the first node the two disagree on, so an
+          // over-eager fingerprint is something the log shows rather than something it hides.
+          if (settings.onNotice) {
+            const twin = graph.states.find(other => other !== state && other.scene.nodes.length === result.scene.nodes.length);
+            if (twin) {
+              const differing = result.scene.nodes.findIndex((node, index) => {
+                const against = twin.scene.nodes[index];
+                return !against || JSON.stringify([node.kind, node.text, Math.round(node.x), Math.round(node.y)])
+                  !== JSON.stringify([against.kind, against.text, Math.round(against.x), Math.round(against.y)]);
+              });
+              const node = differing >= 0 ? result.scene.nodes[differing] : null;
+              settings.onNotice({
+                type: 'near-duplicate', state: state.id, twin: twin.id, nodes: result.scene.nodes.length,
+                differsAt: node ? (node.name || node.kind) + ' “' + String(node.text || '').slice(0, 30) + '”' : 'không tìm ra node khác nhau'
+              });
+            }
+          }
+        } else if (settings.onNotice) {
+          settings.onNotice({ type: 'deduped', into: state.id, actionPath, label });
         }
         return state;
       };

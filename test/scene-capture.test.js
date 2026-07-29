@@ -52,6 +52,33 @@ test('fingerprints a state by its structure, not by its animation frame', () => 
   );
 });
 
+// An 8-minute run came back with six copies of its own home screen, and four of one tab: every
+// revisit fingerprinted as new because the page's relative timestamps had ticked on and its layout
+// landed a fraction of a pixel off. Both are the same screen; only wording and colour are not.
+test('fingerprints a screen the same however long the run has been going', () => {
+  const { sceneFingerprintFor } = load();
+  const screen = (stamp, drift) => ({ nodes: [
+    { kind: 'box', x: 10 + drift, y: 10, width: 300, height: 60, fill: { r: 1, g: 1, b: 1, a: 1 }, stroke: null },
+    { kind: 'text', x: 12, y: 20, width: stamp.length * 7, height: 16, text: stamp },
+    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Trần Thị Bích' }
+  ] });
+
+  assert.equal(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor(screen('15 phút', 0)),
+    'a timestamp that ticked mid-run is the same screen, not a new one');
+  assert.equal(sceneFingerprintFor(screen('2 phút', 0.4)), sceneFingerprintFor(screen('2 phút', 0.6)),
+    'a layout that landed a sub-pixel off is the same screen — whole-pixel rounding split these');
+  assert.notEqual(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor({ nodes: [
+    { kind: 'box', x: 10, y: 10, width: 300, height: 60, fill: { r: 1, g: 1, b: 1, a: 1 }, stroke: null },
+    { kind: 'text', x: 12, y: 20, width: 42, height: 16, text: '2 phút' },
+    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Nguyễn Minh Anh' }
+  ] }), 'different wording is still a different state');
+  assert.notEqual(sceneFingerprintFor(screen('2 phút', 0)), sceneFingerprintFor({ nodes: [
+    { kind: 'box', x: 10, y: 10, width: 300, height: 60, fill: { r: 0.9, g: 1, b: 0.9, a: 1 }, stroke: null },
+    { kind: 'text', x: 12, y: 20, width: 42, height: 16, text: '2 phút' },
+    { kind: 'text', x: 12, y: 40, width: 120, height: 16, text: 'Trần Thị Bích' }
+  ] }), 'a row that lit up when selected is still a different state');
+});
+
 // A dialog fades in over ~200ms, and for the first frames its own opacity is exactly 0 while every
 // child keeps opacity 1. Dropping just the faded element left its children behind, reparented onto the
 // backdrop: the dialog's white sheet vanished and the page showed through its body.

@@ -203,6 +203,12 @@ const transitionKey = transition => [transition.from, transition.to, transition.
 async function applyTransitions(transitions, renderedStates, done, pending) {
   let applied = 0;
   let skipped = 0;
+  // A bare count says a prototype link was lost but never which one or why, and the four reasons
+  // want four different answers from whoever reads the log.
+  const reasons = [];
+  const note = (transition, reason) => {
+    if (reasons.length < 12) reasons.push(transition.from + '→' + transition.to + ' (' + transition.actionKey + '): ' + reason);
+  };
   for (const transition of transitions || []) {
     const key = transitionKey(transition);
     if (done && done.has(key)) continue;
@@ -213,6 +219,9 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
     if (pending && (!sourceNode || !destination?.root)) continue;
     if (!sourceNode || !destination?.root || !transitionTriggers.has(trigger)) {
       skipped += 1;
+      note(transition, !sourceNode ? 'layer của hành động không có trong state nguồn'
+        : !destination?.root ? 'state đích chưa dựng xong'
+        : 'trigger không hỗ trợ: ' + trigger);
       if (done) done.add(key);
       continue;
     }
@@ -234,12 +243,13 @@ async function applyTransitions(transitions, renderedStates, done, pending) {
       if (done) done.add(key);
     } catch (error) {
       skipped += 1;
+      note(transition, 'Figma từ chối reaction: ' + error.message);
       if (done) done.add(key);
     }
   }
   if (skipped) {
     figma.notify('Skipped ' + skipped + ' prototype transitions.', { error: true });
-    figma.ui.postMessage({ type: 'transition-skipped', skipped });
+    figma.ui.postMessage({ type: 'transition-skipped', skipped, reasons });
   }
   if (applied) figma.ui.postMessage({ type: 'transition-progress', applied });
   return { applied, skipped };

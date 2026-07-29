@@ -121,7 +121,10 @@
     $('log-open').addEventListener('click', () => { $('log-sheet').hidden = false; $('log-text').focus(); $('log-text').select(); });
     $('log-close').addEventListener('click', () => { $('log-sheet').hidden = true; });
     $('log-download').addEventListener('click', () => {
-      const blob = new Blob([logLines.join('\n')], { type: 'text/plain' });
+      // The log is almost entirely Vietnamese, and a plain text/plain blob left editors to guess the
+      // encoding — they guessed Latin-1 and "0 lỗi" came back as "0 lá»i". Declare UTF-8 and lead
+      // with a BOM, which is the part Windows and macOS editors actually read.
+      const blob = new Blob(['﻿' + logLines.join('\n')], { type: 'text/plain;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = 'html-figma-importer-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
@@ -242,7 +245,11 @@
           +(degraded?' · '+degraded+' lần phải tải lại iframe':'')
           +(selected.directStarted?' — đang gửi sang Figma…':'…');
       };
-      const onNotice = notice => { if (notice.type === 'reuse-degraded') degraded = notice.degraded; };
+      const onNotice = notice => {
+        if (notice.type === 'reuse-degraded') degraded = notice.degraded;
+        if (notice.type === 'deduped') log('dedup · ' + JSON.stringify(notice.actionPath) + ' → ' + notice.into + ' (' + notice.label.slice(0, 30) + ')');
+        if (notice.type === 'near-duplicate') log('near-duplicate · ' + notice.state + ' vs ' + notice.twin + ' · cùng ' + notice.nodes + ' node · khác ở: ' + notice.differsAt);
+      };
       try {
         const graph=await captureStateGraph(html,{onProgress,onNotice,mode:$('mode').value},onState);
         if (selected.file !== file) return;
@@ -288,7 +295,7 @@
         if (message.type === 'render-issues') log('render-issues · ' + message.title + ' · ' + message.total + ' layer: ' + message.issues.map(issue => issue.kind + ' "' + issue.name + '" → ' + issue.message).join(' | '));
         if (message.type === 'state-summary') log('rendered · ' + message.title + ' · ' + message.built + '/' + message.nodes + ' layer · ' + message.issues + ' lỗi');
         if (message.type === 'import-error' || message.type === 'error') log('render error: ' + message.message);
-        if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped);
+        if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped + (message.reasons?.length ? ' · ' + message.reasons.join(' | ') : ''));
         if (message.type === 'imported') $('reset').hidden = false;
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
