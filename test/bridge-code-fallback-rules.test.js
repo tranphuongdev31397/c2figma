@@ -118,15 +118,16 @@ test('renders normally with no rules backend configured (no fetch in the sandbox
   assert.ok(issues, 'the missing-fetch case must still report the render issue exactly as before');
 });
 
-test('skips a known-bad SVG without calling createNodeFromSvg or re-reporting it', async () => {
+test('skips a known-bad SVG with a risky feature without calling createNodeFromSvg or re-reporting it', async () => {
   const figma = makeFigma();
   figma.createNodeFromSvg = () => { throw new Error('must not be called'); };
-  const fetchMock = makeFetchMock({ rules: { 'svg|plain': { signature: 'svg|plain', fallbackKind: 'svg-render-failed', hitCount: 3, firstSeen: 1, lastSeen: 2 } } });
+  const signature = 'svg|filter';
+  const fetchMock = makeFetchMock({ rules: { [signature]: { signature, fallbackKind: 'svg-render-failed', hitCount: 3, firstSeen: 1, lastSeen: 2 } } });
   run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
   figma.ui.onmessage({
     type: 'import', spec: { title: 'T' }, pageName: 'P',
     scene: { version: 1, viewport: { width: 200, height: 200 }, nodes: [
-      { id: 'a', parentId: '__root__', kind: 'svg', name: 'icon', x: 0, y: 0, width: 10, height: 10, svg: '<svg/>' }
+      { id: 'a', parentId: '__root__', kind: 'svg', name: 'icon', x: 0, y: 0, width: 10, height: 10, svg: '<svg><filter/></svg>' }
     ] }
   });
   await new Promise(resolve => setTimeout(resolve, 60));
@@ -135,6 +136,28 @@ test('skips a known-bad SVG without calling createNodeFromSvg or re-reporting it
   assert.equal(reportCalls.length, 0, 'a known signature must not be re-reported');
   const root = figma.root.children[0]?.children[0];
   assert.ok(root, 'the state frame must still exist');
+});
+
+test('never auto-skips the svg|plain bucket even with a matching known-bad rule', async () => {
+  const figma = makeFigma();
+  let createNodeFromSvgCalls = 0;
+  figma.createNodeFromSvg = () => { createNodeFromSvgCalls += 1; throw new Error('still fails, but must still be attempted'); };
+  const fetchMock = makeFetchMock({ rules: { 'svg|plain': { signature: 'svg|plain', fallbackKind: 'svg-render-failed', hitCount: 50, firstSeen: 1, lastSeen: 2 } } });
+  run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
+  figma.ui.onmessage({
+    type: 'import', spec: { title: 'T' }, pageName: 'P',
+    scene: { version: 1, viewport: { width: 200, height: 200 }, nodes: [
+      { id: 'a', parentId: '__root__', kind: 'svg', name: 'icon', x: 0, y: 0, width: 10, height: 10, svg: '<svg><rect/></svg>' }
+    ] }
+  });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  assert.equal(createNodeFromSvgCalls, 1, 'svg|plain must never be proactively skipped, no matter what the rule says');
+  // the actual failure still reports — recall is restricted, reporting is not.
+  const reportCall = fetchMock.calls.find(call => call.init && call.init.method === 'POST');
+  assert.ok(reportCall, 'the real failure must still be reported even though it was not proactively skipped');
+  const body = JSON.parse(reportCall.init.body);
+  assert.equal(body.signature, 'svg|plain');
 });
 
 test('clamps a known-bad fill instead of losing it', async () => {
@@ -169,4 +192,21 @@ test('fetches known rules once per state, not once per node', async () => {
 
   const getCalls = fetchMock.calls.filter(call => !call.init || !call.init.method || call.init.method === 'GET');
   assert.equal(getCalls.length, 1, 'must batch one GET for the whole state, not one per node');
+});
+
+test('reports a repeated failing signature at most once per renderScene call', async () => {
+  const figma = makeFigma();
+  figma.createNodeFromSvg = () => { throw new Error('always fails'); };
+  const fetchMock = makeFetchMock({ rules: {} });
+  run(figma, { RULES_API_BASE_OVERRIDE: 'http://fake.test', fetch: fetchMock });
+  const nodes = Array.from({ length: 5 }, (_, index) => ({
+    id: 'n' + index, parentId: '__root__', kind: 'svg', name: 'icon' + index, x: 0, y: 0, width: 10, height: 10, svg: '<svg><filter/></svg>'
+  }));
+  figma.ui.onmessage({ type: 'import', spec: { title: 'T' }, pageName: 'P', scene: { version: 1, viewport: { width: 200, height: 200 }, nodes } });
+  await new Promise(resolve => setTimeout(resolve, 60));
+
+  const reportCalls = fetchMock.calls.filter(call => call.init && call.init.method === 'POST');
+  assert.equal(reportCalls.length, 1, 'five nodes sharing one failing signature must send exactly one POST');
+  const body = JSON.parse(reportCalls[0].init.body);
+  assert.equal(body.signature, 'svg|filter');
 });

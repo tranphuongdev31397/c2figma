@@ -1,17 +1,28 @@
+from functools import lru_cache
+
 from fastapi import Depends, FastAPI
-from pydantic import BaseModel, field_validator
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
 
 from store import FALLBACK_KINDS, get_rules, make_redis_client, report_fallback
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
+
+@lru_cache
 def get_redis_client():
     return make_redis_client()
 
 
 class ReportFallbackRequest(BaseModel):
-    signature: str
+    signature: str = Field(max_length=256)
     fallbackKind: str
 
     @field_validator("fallbackKind")

@@ -1,11 +1,12 @@
 const solid = (value, opacity = 1) => ({ type: 'SOLID', color: { r: value.r, g: value.g, b: value.b }, opacity: (value.a ?? 1) * opacity });
 const fontStyle = weight => weight >= 700 ? 'Bold' : weight >= 600 ? 'Semi Bold' : 'Regular';
 const RULES_API_BASE = typeof RULES_API_BASE_OVERRIDE !== 'undefined' ? RULES_API_BASE_OVERRIDE : 'REPLACE_WITH_DEPLOYED_RULES_API_URL';
-const hasRulesApi = () => typeof fetch === 'function';
+const hasRulesApi = () => typeof fetch === 'function' && /^https?:\/\//.test(RULES_API_BASE);
 
 const SVG_FALLBACK_FEATURES = ['filter', 'clipPath', 'mask', 'foreignObject', 'use', 'symbol'];
+const SVG_FALLBACK_FEATURE_PATTERNS = SVG_FALLBACK_FEATURES.map(tag => [tag, new RegExp('<' + tag, 'i')]);
 const svgSignature = svg => {
-  const present = SVG_FALLBACK_FEATURES.filter(tag => new RegExp('<' + tag, 'i').test(svg || ''));
+  const present = SVG_FALLBACK_FEATURE_PATTERNS.filter(([, pattern]) => pattern.test(svg || '')).map(([tag]) => tag);
   return 'svg|' + (present.length ? present.join(',') : 'plain');
 };
 const fillSignature = fill => {
@@ -143,9 +144,15 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
   if (spot.section) await sectionLabel(page, spot, depth);
   const rules = await fetchKnownRules(
     scene.nodes
-      .filter(item => item.kind === 'svg' || item.fill)
+      .filter(item => item.kind === 'svg' || (item.fill && item.kind !== 'text'))
       .map(item => item.kind === 'svg' ? svgSignature(item.svg) : fillSignature(item.fill))
   );
+  const reportedSignatures = new Set();
+  const reportOnce = (signature, fallbackKind) => {
+    if (reportedSignatures.has(signature)) return;
+    reportedSignatures.add(signature);
+    reportFallback(signature, fallbackKind);
+  };
   for (let index = 0; index < scene.nodes.length; index += 1) {
     const item = scene.nodes[index];
     try {
@@ -159,7 +166,8 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       const build = () => {
         if (item.kind === 'text') return figma.createText();
         if (item.kind !== 'svg') return figma.createFrame();
-        if (rules.get(svgSignature(item.svg)) === 'svg-render-failed') {
+        const svgSig = svgSignature(item.svg);
+        if (svgSig !== 'svg|plain' && rules.get(svgSig) === 'svg-render-failed') {
           issues.push({ name: item.name || item.kind, kind: item.kind, message: 'SVG này đã biết trước không render được (bỏ qua sớm).' });
           const placeholder = figma.createFrame();
           placeholder.fills = [];
@@ -168,7 +176,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         try { return figma.createNodeFromSvg(item.svg); }
         catch (error) {
           issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
-          reportFallback(svgSignature(item.svg), 'svg-render-failed');
+          reportOnce(svgSig, 'svg-render-failed');
           const placeholder = figma.createFrame();
           placeholder.fills = [];
           return placeholder;
@@ -197,7 +205,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         // A fill Figma accepts but does not keep leaves a see-through frame and no error — say so.
         if (fillValue && !(node.fills && node.fills.length)) {
           issues.push({ name: node.name, kind: 'fill', message: 'Figma bỏ fill ' + JSON.stringify(item.fill) });
-          reportFallback(fillSignature(item.fill), 'fill-dropped');
+          reportOnce(fillSignature(item.fill), 'fill-dropped');
         }
         const borders = item.borders;
         const weights = borders ? { top: borders.top.width, right: borders.right.width, bottom: borders.bottom.width, left: borders.left.width } : { top: item.strokeWidth, right: item.strokeWidth, bottom: item.strokeWidth, left: item.strokeWidth };
@@ -222,7 +230,7 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       built += 1;
     } catch (error) {
       issues.push({ name: item.name || item.kind, kind: item.kind, message: error.message });
-      reportFallback(item.kind + '|generic', 'node-render-failed');
+      reportOnce(item.kind + '|generic', 'node-render-failed');
     }
     if ((index + 1) % 24 === 0 || index + 1 === scene.nodes.length) {
       figma.ui.postMessage({ type: 'progress', current: index + 1, total: scene.nodes.length, title });

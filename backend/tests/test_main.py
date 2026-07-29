@@ -44,3 +44,8 @@ def test_get_rules_after_post_returns_the_rule():
     body = response.json()["rules"]
     assert body["sig-d"]["fallbackKind"] == "node-render-failed"
     assert body["sig-unknown"] is None
+
+
+def test_post_rejects_over_length_signature():
+    response = client.post("/rules", json={"signature": "x" * 300, "fallbackKind": "fill-dropped"})
+    assert response.status_code == 422

@@ -131,10 +131,10 @@ thẳng xử lý tương ứng — không phải học ra 1 cách sửa mới.
   `figma.createNodeFromSvg` (đã biết trước sẽ throw), tạo placeholder frame
   ngay — tránh 1 exception vô ích, không đổi kết quả hình ảnh so với nhánh
   catch hiện tại.
-- **`node-render-failed`** (generic catch): v1 chỉ ghi nhận + hiển thị trong
-  run log ("lỗi này gặp N lần ở nơi khác"), không tự đổi hành vi — lỗi ở đây
-  quá đa dạng (resize, stroke, corner radius...) để suy ra 1 fix chung an
-  toàn.
+- **`node-render-failed`** (generic catch): v1 chỉ ghi nhận (POST) để tích
+  luỹ dữ liệu cho phân tích sau này — v1 không tự động hiển thị hitCount ở
+  đâu cả, không tự đổi hành vi — lỗi ở đây quá đa dạng (resize, stroke,
+  corner radius...) để suy ra 1 fix chung an toàn.
 
 ### 4. Error handling & giới hạn
 

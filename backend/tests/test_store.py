@@ -40,3 +40,9 @@ def test_get_rules_returns_stored_record(client):
     report_fallback(client, "sig-a", "svg-render-failed")
     result = get_rules(client, ["sig-a"])
     assert result["sig-a"]["fallbackKind"] == "svg-render-failed"
+
+
+def test_report_fallback_sets_a_ttl_on_write(client):
+    report_fallback(client, "sig-a", "fill-dropped")
+    ttl = client.ttl("rule:sig-a")
+    assert ttl > 0

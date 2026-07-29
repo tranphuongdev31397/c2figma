@@ -6,6 +6,7 @@ from typing import Iterable
 import redis
 
 FALLBACK_KINDS = {"svg-render-failed", "fill-dropped", "node-render-failed"}
+RULE_TTL_SECONDS = 60 * 60 * 24 * 90  # 90 days
 
 
 def _key(signature: str) -> str:
@@ -44,5 +45,5 @@ def report_fallback(client: "redis.Redis", signature: str, fallback_kind: str) -
             "firstSeen": now,
             "lastSeen": now,
         }
-    client.set(_key(signature), json.dumps(record))
+    client.set(_key(signature), json.dumps(record), ex=RULE_TTL_SECONDS)
     return record
