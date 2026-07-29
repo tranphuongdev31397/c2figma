@@ -88,6 +88,7 @@
         <a class="guide-link" href="/guide">Hướng dẫn sử dụng <span>↗</span></a>
         <div class="primary-actions">
           <button id="log-open" class="log-open" hidden>Log lỗi <span id="log-count">0</span></button>
+          <button id="reset" hidden>Làm mới</button>
           <a class="button install" data-install href="/downloads/html-figma-importer.zip" download>Cài plugin một lần</a>
           <button id="download" class="fallback" disabled>Tải theo HTML (.zip)</button>
         </div>
@@ -186,6 +187,19 @@
       if (inFigma) return;
       download();
     }
+    // The plugin no longer closes itself on success, so a finished run has to be cleared by hand to
+    // make room for the next file. The log survives on purpose — it is the run's only record, and it
+    // is usually read after the import, not during it.
+    function reset() {
+      selected = null;
+      $('summary').style.display = 'none';
+      $('page-name-field').hidden = true;
+      $('chips').innerHTML = '';
+      $('download').disabled = true;
+      $('reset').hidden = true;
+      $('status').textContent = 'Sẵn sàng cho file tiếp theo. Log lỗi của lần chạy trước vẫn giữ nguyên.';
+    }
+    $('reset').addEventListener('click', reset);
     async function start() {
       if (!selected || selected.started) return;
       selected.started=true;
@@ -275,6 +289,7 @@
         if (message.type === 'state-summary') log('rendered · ' + message.title + ' · ' + message.built + '/' + message.nodes + ' layer · ' + message.issues + ' lỗi');
         if (message.type === 'import-error' || message.type === 'error') log('render error: ' + message.message);
         if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped);
+        if (message.type === 'imported') $('reset').hidden = false;
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'state-progress'

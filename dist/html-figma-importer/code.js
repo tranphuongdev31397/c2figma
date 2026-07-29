@@ -133,7 +133,15 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
         node.characters = item.text || '';
         node.fontSize = Math.max(1, item.fontSize || 14);
         node.fills = [solid(item.color || { r: .1, g: .1, b: .1 })];
-        node.textAutoResize = 'WIDTH_AND_HEIGHT';
+        // A run the page kept on one line stays on one line, however much wider Inter is than the
+        // page's own font. A run the page itself wrapped has to keep wrapping, so pin the width it
+        // wrapped inside and let Figma re-flow the height — left to grow, it overflows its bubble.
+        if (item.lines > 1) {
+          node.textAutoResize = 'HEIGHT';
+          node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height)));
+        } else {
+          node.textAutoResize = 'WIDTH_AND_HEIGHT';
+        }
       } else if (item.kind !== 'svg') {
         node.layoutMode = 'NONE';
         node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
@@ -299,11 +307,12 @@ function reportStateError(state, error) {
   figma.ui.postMessage({ type: 'import-error', message: label + ': ' + error.message });
 }
 
+// ponytail: the plugin deliberately outlives its own import. Closing on success took the run log
+// down with it before anyone could read, let alone download, the layers it had to skip.
 function finishSession(current, standalone = false) {
   if (current.failed || (!standalone && current !== session)) return;
   figma.notify('Đã tạo design editable trong Figma.');
   figma.ui.postMessage({ type: 'imported', title: current.title, pageName: current.basePageName });
-  figma.closePlugin('Đã tạo design editable từ HTML.');
 }
 
 figma.showUI(__html__, { width: 720, height: 620 });
@@ -357,7 +366,6 @@ figma.ui.onmessage = message => {
       const rendered = await renderScene(message.scene, title, message.pageName || message.spec?.pageName || title);
       figma.notify('Đã tạo design editable trong Figma.');
       figma.ui.postMessage({ type: 'imported', title, pageName: rendered.pageName });
-      figma.closePlugin('Đã tạo design editable từ HTML.');
     } catch (error) {
       reportFatal(error);
     }

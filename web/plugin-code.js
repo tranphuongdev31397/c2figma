@@ -89,7 +89,11 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
-      node.textAutoResize = 'WIDTH_AND_HEIGHT';
+      // A run the page kept on one line stays on one line, however much wider Inter is than the
+      // page's own font. A run the page itself wrapped has to keep wrapping, so pin the width it
+      // wrapped inside and let Figma re-flow the height — left to grow, it overflows its bubble.
+      if (item.lines > 1) { node.textAutoResize = 'HEIGHT'; node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height))); }
+      else node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
@@ -174,8 +178,10 @@ async function boot() {
       const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
       const scene = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
       figma.notify('Đã tạo design editable trong Figma.');
+      // Stays open on purpose: this path has a UI, and closing it took the run log — the only record
+      // of the layers that had to be skipped — down before it could be read. The graph path above
+      // closes because it never shows one.
       post({type:'imported', title, pageName:scene.pageName});
-      figma.closePlugin('Đã tạo design editable từ HTML.');
     } catch (error) {
       figma.notify('Không thể tạo design: ' + error.message, {error:true});
       post({type:'error', message:error.message});

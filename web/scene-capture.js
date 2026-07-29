@@ -220,17 +220,23 @@
           range.selectNodeContents(child);
           const text = child.data.replace(/\s+/g, ' ').trim();
           if (payload(text)) continue;
-          for (const textRect of [...range.getClientRects()]) {
-            if (!text || textRect.width <= 0 || textRect.height <= 0) continue;
+          // getClientRects() returns one rect per visual line, so a node per rect wrote the whole
+          // sentence once per line — a wrapped chat bubble came out with its text stamped twice, each
+          // copy forced onto one line that overflowed the bubble. One node per run instead, boxed by
+          // the union of its lines, with the line count so the renderer knows to let Figma re-wrap.
+          const lineRects = [...range.getClientRects()].filter(line => line.width > 0 && line.height > 0);
+          const box = range.getBoundingClientRect();
+          if (text && lineRects.length) {
             nodes.push({
               id: 'n' + nodes.length,
               parentId: id,
               kind: 'text',
               name: 'Text / ' + text.slice(0, 40),
-              x: textRect.left,
-              y: textRect.top,
-              width: textRect.width,
-              height: textRect.height,
+              x: box.left,
+              y: box.top,
+              width: box.width,
+              height: box.height,
+              lines: lineRects.length,
               fill: null,
               stroke: null,
               strokeWidth: 0,

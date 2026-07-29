@@ -88,6 +88,7 @@
         <a class="guide-link" href="/guide">Hướng dẫn sử dụng <span>↗</span></a>
         <div class="primary-actions">
           <button id="log-open" class="log-open" hidden>Log lỗi <span id="log-count">0</span></button>
+          <button id="reset" hidden>Làm mới</button>
           <a class="button install" data-install href="/downloads/html-figma-importer.zip" download>Cài plugin một lần</a>
           <button id="download" class="fallback" disabled>Tải theo HTML (.zip)</button>
         </div>
@@ -326,17 +327,23 @@
           range.selectNodeContents(child);
           const text = child.data.replace(/\s+/g, ' ').trim();
           if (payload(text)) continue;
-          for (const textRect of [...range.getClientRects()]) {
-            if (!text || textRect.width <= 0 || textRect.height <= 0) continue;
+          // getClientRects() returns one rect per visual line, so a node per rect wrote the whole
+          // sentence once per line — a wrapped chat bubble came out with its text stamped twice, each
+          // copy forced onto one line that overflowed the bubble. One node per run instead, boxed by
+          // the union of its lines, with the line count so the renderer knows to let Figma re-wrap.
+          const lineRects = [...range.getClientRects()].filter(line => line.width > 0 && line.height > 0);
+          const box = range.getBoundingClientRect();
+          if (text && lineRects.length) {
             nodes.push({
               id: 'n' + nodes.length,
               parentId: id,
               kind: 'text',
               name: 'Text / ' + text.slice(0, 40),
-              x: textRect.left,
-              y: textRect.top,
-              width: textRect.width,
-              height: textRect.height,
+              x: box.left,
+              y: box.top,
+              width: box.width,
+              height: box.height,
+              lines: lineRects.length,
               fill: null,
               stroke: null,
               strokeWidth: 0,
@@ -870,7 +877,11 @@ async function renderScene(scene, title, pageName, target, depth = 0) {
       node.characters = item.text || '';
       node.fontSize = Math.max(1, item.fontSize || 14);
       node.fills = [solid(color(item.color,{r:0.1,g:0.1,b:0.1}), item.color?.a ?? 1)];
-      node.textAutoResize = 'WIDTH_AND_HEIGHT';
+      // A run the page kept on one line stays on one line, however much wider Inter is than the
+      // page's own font. A run the page itself wrapped has to keep wrapping, so pin the width it
+      // wrapped inside and let Figma re-flow the height — left to grow, it overflows its bubble.
+      if (item.lines > 1) { node.textAutoResize = 'HEIGHT'; node.resize(Math.max(1, Math.round(item.width)), Math.max(1, Math.round(item.height))); }
+      else node.textAutoResize = 'WIDTH_AND_HEIGHT';
     } else if (item.kind !== 'svg') {
       node.layoutMode = 'NONE';
       node.clipsContent = ['hidden', 'clip', 'auto', 'scroll'].includes(item.overflow);
@@ -955,8 +966,10 @@ async function boot() {
       const title = message.spec?.title || CONTENT_TITLE || 'Imported HTML';
       const scene = await renderScene(message.scene || INITIAL_SCENE, title, message.pageName || message.spec?.pageName || DEFAULT_PAGE_NAME);
       figma.notify('Đã tạo design editable trong Figma.');
+      // Stays open on purpose: this path has a UI, and closing it took the run log — the only record
+      // of the layers that had to be skipped — down before it could be read. The graph path above
+      // closes because it never shows one.
       post({type:'imported', title, pageName:scene.pageName});
-      figma.closePlugin('Đã tạo design editable từ HTML.');
     } catch (error) {
       figma.notify('Không thể tạo design: ' + error.message, {error:true});
       post({type:'error', message:error.message});
@@ -1049,6 +1062,19 @@ setTimeout(boot, 0);`;
       if (inFigma) return;
       download();
     }
+    // The plugin no longer closes itself on success, so a finished run has to be cleared by hand to
+    // make room for the next file. The log survives on purpose — it is the run's only record, and it
+    // is usually read after the import, not during it.
+    function reset() {
+      selected = null;
+      $('summary').style.display = 'none';
+      $('page-name-field').hidden = true;
+      $('chips').innerHTML = '';
+      $('download').disabled = true;
+      $('reset').hidden = true;
+      $('status').textContent = 'Sẵn sàng cho file tiếp theo. Log lỗi của lần chạy trước vẫn giữ nguyên.';
+    }
+    $('reset').addEventListener('click', reset);
     async function start() {
       if (!selected || selected.started) return;
       selected.started=true;
@@ -1138,6 +1164,7 @@ setTimeout(boot, 0);`;
         if (message.type === 'state-summary') log('rendered · ' + message.title + ' · ' + message.built + '/' + message.nodes + ' layer · ' + message.issues + ' lỗi');
         if (message.type === 'import-error' || message.type === 'error') log('render error: ' + message.message);
         if (message.type === 'transition-skipped') log('transitions skipped: ' + message.skipped);
+        if (message.type === 'imported') $('reset').hidden = false;
         $('status').textContent = message.type === 'progress'
           ? `Đang dựng Figma: ${message.current}/${message.total} layers…`
           : message.type === 'state-progress'
