@@ -15,7 +15,9 @@ function createPluginBundle() {
       main: 'code.js',
       ui: 'ui.html',
       documentAccess: 'dynamic-page',
-      networkAccess: { allowedDomains: ['none'] },
+      // Replace with the real host once backend/ is deployed (see README.md "Runtime self-learning
+      // fallback backend"); must match the host embedded in RULES_API_BASE in src/bridge-code.js.
+      networkAccess: { allowedDomains: ['REPLACE_WITH_DEPLOYED_RULES_API_HOST'] },
       editorType: ['figma']
     },
     code: fs.readFileSync(path.join(__dirname, 'bridge-code.js'), 'utf8'),

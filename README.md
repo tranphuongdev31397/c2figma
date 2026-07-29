@@ -27,6 +27,23 @@ The direct importer is the recommended path because it captures the HTML after i
 
 Open `web/index.html`, drag any standalone HTML into the page, then click **Tải theo HTML (.zip)**. The ZIP contains the captured scene and a standalone plugin.
 
+## Runtime self-learning fallback backend (optional)
+
+`src/bridge-code.js` can recall which SVG/fill patterns are known to fail
+rendering, shared across every user via a small backend in `backend/`. It is
+optional — with no backend configured, rendering behaves exactly as before.
+
+To enable it:
+
+1. Deploy `backend/` (FastAPI) anywhere that can reach a Redis instance, with
+   `REDIS_URL` set. Locally: `cd backend && pip install -r requirements-dev.txt
+   && REDIS_URL=redis://localhost:6379 uvicorn main:app --reload`.
+2. In `src/bridge-code.js`, replace `RULES_API_BASE`'s placeholder
+   (`REPLACE_WITH_DEPLOYED_RULES_API_URL`) with the deployed URL.
+3. In `src/plugin-bundle.js`, replace `networkAccess.allowedDomains`'s
+   placeholder (`REPLACE_WITH_DEPLOYED_RULES_API_HOST`) with that same host.
+4. Rebuild the plugin (`npm run plugin` / `npm run plugin:package`).
+
 ## Deploy to Vercel
 
 This project is a static site. In Vercel, import the GitHub repository with no build command and no output directory override. `vercel.json` routes `/` to `web/index.html` and `/guide` to the in-app user guide. Before pushing changes to the web download, run `npm run plugin:package` so `web/downloads/html-figma-importer.zip` is current.
