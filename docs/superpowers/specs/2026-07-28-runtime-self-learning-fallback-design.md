@@ -104,9 +104,10 @@ bước "quét DOM" riêng:
 3. Cache kết quả trong 1 `Map` cục bộ của lần gọi `renderScene` đó (không cần
    localStorage/clientStorage — dùng 1 lần cho phiên import này).
 4. Khi xử lý 1 node trong vòng lặp: tra cache trước.
-   - Có rule khớp signature, `fallbackKind` = `'svg-render-failed'` hoặc
-     `'fill-dropped'` → áp thẳng xử lý cố định tương ứng (xem Section 3b),
-     bỏ qua đường đi mặc định sẽ throw/bị Figma bỏ fill.
+   - Có rule khớp signature, `fallbackKind` = `'svg-render-failed'` (trừ
+     signature `svg|plain`, xem ngoại lệ ở Section 3b) hoặc `'fill-dropped'`
+     → áp thẳng xử lý cố định tương ứng (xem Section 3b), bỏ qua đường đi
+     mặc định sẽ throw/bị Figma bỏ fill.
    - Không khớp, hoặc `fallbackKind` = `'node-render-failed'` (v1 chưa có
      resolution tự động — xem "Ngoài phạm vi" ở Section 1) → chạy nhánh gốc
      như hiện tại; nếu nó vẫn rơi vào 1 trong 3 `issues.push`, bắn
@@ -130,11 +131,16 @@ thẳng xử lý tương ứng — không phải học ra 1 cách sửa mới.
 - **`svg-render-failed`**: rule khớp → bỏ qua hẳn lệnh gọi
   `figma.createNodeFromSvg` (đã biết trước sẽ throw), tạo placeholder frame
   ngay — tránh 1 exception vô ích, không đổi kết quả hình ảnh so với nhánh
-  catch hiện tại.
-- **`node-render-failed`** (generic catch): v1 chỉ ghi nhận + hiển thị trong
-  run log ("lỗi này gặp N lần ở nơi khác"), không tự đổi hành vi — lỗi ở đây
-  quá đa dạng (resize, stroke, corner radius...) để suy ra 1 fix chung an
-  toàn.
+  catch hiện tại. **Ngoại lệ**: signature `svg|plain` (SVG không có feature
+  rủi ro nào trong `filter/clipPath/mask/foreignObject/use/symbol`) không
+  bao giờ được auto-skip dù rule đã khớp — bucket này khớp hầu hết icon
+  bình thường, nên 1 lần lỗi ngẫu nhiên sẽ tắt SVG import cho mọi user vĩnh
+  viễn (không có rollback). Vẫn báo cáo (POST) bình thường cho `svg|plain`
+  để giữ telemetry — chỉ auto-recall bị thu hẹp, không phải reporting.
+- **`node-render-failed`** (generic catch): v1 chỉ ghi nhận (POST) để tích
+  luỹ dữ liệu cho phân tích sau này — v1 không tự động hiển thị hitCount ở
+  đâu cả, không tự đổi hành vi — lỗi ở đây quá đa dạng (resize, stroke,
+  corner radius...) để suy ra 1 fix chung an toàn.
 
 ### 4. Error handling & giới hạn
 

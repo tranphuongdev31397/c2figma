@@ -15,6 +15,9 @@ function createPluginBundle() {
       main: 'code.js',
       ui: 'ui.html',
       documentAccess: 'dynamic-page',
+      // Deployer must replace 'none' with the real backend host once backend/ is deployed (see
+      // README.md "Runtime self-learning fallback backend"); must match the host embedded in
+      // RULES_API_BASE in src/bridge-code.js.
       networkAccess: { allowedDomains: ['none'] },
       editorType: ['figma']
     },

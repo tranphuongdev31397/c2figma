@@ -7,6 +7,7 @@ test('creates a Figma plugin bundle that imports from its own UI', () => {
 
   assert.equal(bundle.manifest.ui, 'ui.html');
   assert.equal(bundle.manifest.documentAccess, 'dynamic-page');
+  assert.deepEqual(bundle.manifest.networkAccess, { allowedDomains: ['none'] });
   assert.match(bundle.code, /figma\.showUI\(__html__/);
   assert.match(bundle.code, /figma\.setCurrentPageAsync\(page\)/);
   assert.doesNotMatch(bundle.code, /figma\.currentPage\s*=\s*page/);
