@@ -5,8 +5,10 @@ pipeline against DOM-derived ground truth.
 
 ## Adding a fixture
 
-1. Open `web/index.html`, drop the same HTML file this fixture is for, pick
-   the static (non-interactive) capture mode, download the ZIP.
+1. Open `web/index.html`, drop the same HTML file this fixture is for, leave
+   the "Khám phá các state tương tác" (explore interactive states) checkbox
+   UNCHECKED — checking it switches to the multi-state capture mode this
+   fixture workflow doesn't want — then download the ZIP.
 2. Unzip it, copy `scene.json` to `bench/fixtures/<case-name>/truth.json`.
 3. Screenshot the same page at **exactly** `truth.json`'s `viewport` width
    and height — a mismatch makes `bench/compare.js` refuse to score it.

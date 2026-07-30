@@ -1,5 +1,5 @@
 {
-  "$comment": "Mirror of src/image-scene.js NODE_SCHEMA. Keep byte-identical to the code. Shared verbatim by both providers: Ollama's `format` field and OpenAI's `response_format.json_schema.schema`.",
+  "$comment": "Mirror of src/scene-schema.js NODE_SCHEMA. Keep byte-identical to the code. Shared verbatim by both providers: Ollama's `format` field and OpenAI's `response_format.json_schema.schema`. Note: src/image-scene.js's fillNodeDefaults converts the fill/stroke/color hex values described below into wire-format {r,g,b,a} objects before writing scene.json — the hex strings here never reach the final scene.json file.",
   "type": "object",
   "properties": {
     "nodes": {

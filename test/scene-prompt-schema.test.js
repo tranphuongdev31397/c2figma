@@ -34,4 +34,5 @@ test('buildPrompt uses MUST/NEVER signal words and the grounding-against-fabrica
   assert.match(prompt, /\bMUST\b/);
   assert.match(prompt, /\bNEVER\b/);
   assert.match(prompt, /invent a node that is not visible/);
+  assert.match(prompt, /parent before any of its children/);
 });

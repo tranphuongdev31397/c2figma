@@ -1,7 +1,11 @@
-# Current prompt (mirror of `src/image-scene.js` — `PROMPT` template)
+# Current prompt (mirror of `src/scene-prompt.js` — `buildPrompt()` template)
 
 Keep this byte-identical to the code. `{width}`/`{height}` are interpolated
-per-image at call time.
+per-image at call time. Note: `fill`/`stroke`/`color` below are hex strings
+as the model returns them — `src/image-scene.js`'s `fillNodeDefaults` (via
+`hexToWire`) converts these to wire-format `{r,g,b,a}` objects before writing
+the final `scene.json`, so the hex values described here do NOT end up in
+`scene.json` verbatim.
 
 ```
 You are a UI screenshot analyst extracting layout data for a Figma import pipeline. Precision matters more than completeness — a wrong coordinate breaks the import.
@@ -13,6 +17,7 @@ TASK: List every visible box (rectangle/card/button/container) and every distinc
 MUST:
 - x,y = top-left corner, measured in absolute pixels against the {width}x{height} frame you were told — not eyeballed proportionally
 - parentId = the id of the immediate visual container only, never a distant ancestor. Top-level nodes: parentId = null
+- emit each node's parent before any of its children in the returned array — a child listed before its parent will not nest correctly
 - fill/stroke/color = hex string of the dominant color in that region
 - name = semantic role, e.g. "Button / Submit", "Card / Product 1", "Text / Title" — never "Rectangle 1" or "div"
 

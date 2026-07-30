@@ -8,6 +8,7 @@ TASK: List every visible box (rectangle/card/button/container) and every distinc
 MUST:
 - x,y = top-left corner, measured in absolute pixels against the ${width}x${height} frame you were told — not eyeballed proportionally
 - parentId = the id of the immediate visual container only, never a distant ancestor. Top-level nodes: parentId = null
+- emit each node's parent before any of its children in the returned array — a child listed before its parent will not nest correctly
 - fill/stroke/color = hex string of the dominant color in that region
 - name = semantic role, e.g. "Button / Submit", "Card / Product 1", "Text / Title" — never "Rectangle 1" or "div"
 

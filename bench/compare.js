@@ -3,23 +3,18 @@ const path = require('node:path');
 
 const MATCH_THRESHOLD = 0.3;
 
-function hexToRgb(hex) {
-  if (!hex) return null;
-  const clean = hex.replace('#', '');
-  const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
-  const value = parseInt(full, 16);
-  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
-}
-
 // ponytail: Euclidean RGB distance, not CIEDE2000 — good enough to tell "close"
 // from "wrong" for a first pass. Upgrade to CIEDE2000 (already available in
 // .claude/finan-qc/ui-engine/'s venv, a different project, not installed here)
 // if this proves misleading against eval-log.md results.
-function colorDelta(hexA, hexB) {
-  const a = hexToRgb(hexA);
-  const b = hexToRgb(hexB);
-  if (!a || !b) return null;
-  return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+function colorDelta(colorA, colorB) {
+  if (!colorA || !colorB) return null;
+  const scale = c => c * 255;
+  return Math.sqrt(
+    (scale(colorA.r) - scale(colorB.r)) ** 2 +
+    (scale(colorA.g) - scale(colorB.g)) ** 2 +
+    (scale(colorA.b) - scale(colorB.b)) ** 2
+  );
 }
 
 function iou(a, b) {
@@ -64,6 +59,9 @@ function normalizeText(text) {
 }
 
 function score(truth, scene) {
+  if (!truth.viewport || !scene.viewport) {
+    throw new Error('Both truth.json and scene.json must have a top-level "viewport" field.');
+  }
   if (truth.viewport.width !== scene.viewport.width || truth.viewport.height !== scene.viewport.height) {
     throw new Error(
       `Viewport mismatch: truth is ${truth.viewport.width}x${truth.viewport.height}, ` +

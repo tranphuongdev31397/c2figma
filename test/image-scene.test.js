@@ -1,14 +1,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { fillNodeDefaults, buildScene } = require('../src/image-scene');
+const { fillNodeDefaults, buildScene, hexToWire } = require('../src/image-scene');
+
+test('hexToWire converts a 6-digit hex to {r,g,b,a:1} scaled 0..1', () => {
+  assert.deepEqual(hexToWire('#FF0000'), { r: 1, g: 0, b: 0, a: 1 });
+});
+
+test('hexToWire expands a 3-digit hex to the same result as its 6-digit form', () => {
+  assert.deepEqual(hexToWire('#F00'), hexToWire('#FF0000'));
+});
+
+test('hexToWire returns null for null input and for a non-hex string', () => {
+  assert.equal(hexToWire(null), null);
+  assert.equal(hexToWire('not-a-color'), null);
+});
 
 test('fillNodeDefaults adds the wire-format fields a vision model cannot infer', () => {
   const raw = {
     id: 'n0', parentId: null, kind: 'box', name: 'Card / Product',
-    x: 10, y: 20, width: 100, height: 50, fill: '#FFFFFF', stroke: null,
+    x: 10, y: 20, width: 100, height: 50, fill: '#FF0000', stroke: null,
     strokeWidth: 0, radius: 4, text: '', fontSize: 0, fontWeight: 400, color: null
   };
   const filled = fillNodeDefaults(raw);
+  assert.deepEqual(filled.fill, { r: 1, g: 0, b: 0, a: 1 });
+  assert.equal(filled.stroke, null);
+  assert.equal(filled.color, null);
   assert.equal(filled.opacity, 1);
   assert.equal(filled.position, 'static');
   assert.equal(filled.zIndex, 'auto');

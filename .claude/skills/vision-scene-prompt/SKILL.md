@@ -13,11 +13,12 @@ pipeline code itself.
 
 ## Source of truth
 
-The prompt and schema actually sent to the model live in `src/image-scene.js`
-as JS constants (`PROMPT`, `NODE_SCHEMA`). `references/current-prompt.md` and
-`references/node-schema.json` in this skill are the **documented, reviewable
-copy** — keep them byte-identical to the code. If they drift, the code wins;
-update the reference files to match, don't guess which is newer.
+The prompt and schema actually sent to the model live in `src/scene-prompt.js`
+(function `buildPrompt`) and `src/scene-schema.js` (constant `NODE_SCHEMA`).
+`references/current-prompt.md` and `references/node-schema.json` in this
+skill are the **documented, reviewable copy** — keep them byte-identical to
+the code. If they drift, the code wins; update the reference files to match,
+don't guess which is newer.
 
 ## Hard rules for this prompt (why, not just what)
 

@@ -6,9 +6,28 @@ const openai = require('./providers/openai');
 
 const PROVIDERS = { ollama, openai };
 
+// ponytail: the vision model outputs hex (natural for a vision model);
+// the wire-format renderer wants {r,g,b,a} 0..1. Convert once here, at
+// the CLI's post-processing boundary, instead of teaching the model or
+// the renderer a second color format.
+function hexToWire(hex) {
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || '');
+  if (!match) return null;
+  const full = match[1].length === 3 ? match[1].split('').map(c => c + c).join('') : match[1];
+  return {
+    r: parseInt(full.slice(0, 2), 16) / 255,
+    g: parseInt(full.slice(2, 4), 16) / 255,
+    b: parseInt(full.slice(4, 6), 16) / 255,
+    a: 1
+  };
+}
+
 function fillNodeDefaults(node) {
   return {
     ...node,
+    fill: hexToWire(node.fill),
+    stroke: hexToWire(node.stroke),
+    color: hexToWire(node.color),
     opacity: 1,
     position: 'static',
     zIndex: 'auto',
@@ -57,6 +76,10 @@ async function main() {
     apiKey: argument('--api-key', undefined)
   });
 
+  if (!Array.isArray(nodes)) {
+    throw new Error(`Provider "${providerName}" returned no nodes array — response was: ${JSON.stringify(nodes)}`);
+  }
+
   const scene = buildScene(nodes, { width, height });
   const output = path.resolve(argument('--out', 'scene.json'));
   fs.writeFileSync(output, JSON.stringify(scene, null, 2));
@@ -70,4 +93,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { fillNodeDefaults, buildScene };
+module.exports = { fillNodeDefaults, buildScene, hexToWire };

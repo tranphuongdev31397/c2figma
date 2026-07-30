@@ -4,4 +4,4 @@ node_modules/
 .worktrees/
 !web/downloads/html-figma-importer.zip
 __pycache__/
-bench/fixtures/**/scene.*.json
+bench/fixtures/**/scene*.json

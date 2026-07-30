@@ -19,18 +19,19 @@ test('iou is between 0 and 1 for partial overlap', () => {
   assert.ok(result > 0 && result < 1, `expected 0 < iou < 1, got ${result}`);
 });
 
-test('colorDelta is 0 for identical hex colors', () => {
-  assert.equal(colorDelta('#FF5733', '#FF5733'), 0);
+test('colorDelta is 0 for identical {r,g,b,a} colors', () => {
+  const color = { r: 1, g: 0.34, b: 0.2, a: 1 };
+  assert.equal(colorDelta(color, color), 0);
 });
 
 test('colorDelta is null when either color is missing', () => {
-  assert.equal(colorDelta(null, '#FFFFFF'), null);
-  assert.equal(colorDelta('#FFFFFF', null), null);
+  assert.equal(colorDelta(null, { r: 1, g: 1, b: 1, a: 1 }), null);
+  assert.equal(colorDelta({ r: 1, g: 1, b: 1, a: 1 }, null), null);
 });
 
 test('colorDelta measures Euclidean RGB distance', () => {
   // black vs white: sqrt(255^2 * 3) ≈ 441.67
-  const delta = colorDelta('#000000', '#FFFFFF');
+  const delta = colorDelta({ r: 0, g: 0, b: 0, a: 1 }, { r: 1, g: 1, b: 1, a: 1 });
   assert.ok(Math.abs(delta - 441.67) < 0.1, `expected ~441.67, got ${delta}`);
 });
 
@@ -71,14 +72,14 @@ test('score aggregates precision, recall, mean IoU, color delta, and text match 
   const truth = {
     viewport: { width: 100, height: 100 },
     nodes: [
-      { kind: 'box', x: 0, y: 0, width: 10, height: 10, fill: '#000000', color: null, text: '' },
+      { kind: 'box', x: 0, y: 0, width: 10, height: 10, fill: { r: 0, g: 0, b: 0, a: 1 }, color: null, text: '' },
       { kind: 'text', x: 20, y: 20, width: 10, height: 10, fill: null, color: null, text: 'Hello' }
     ]
   };
   const scene = {
     viewport: { width: 100, height: 100 },
     nodes: [
-      { kind: 'box', x: 0, y: 0, width: 10, height: 10, fill: '#000000', color: null, text: '' },
+      { kind: 'box', x: 0, y: 0, width: 10, height: 10, fill: { r: 0, g: 0, b: 0, a: 1 }, color: null, text: '' },
       { kind: 'text', x: 20, y: 20, width: 10, height: 10, fill: null, color: null, text: 'Hello' },
       { kind: 'box', x: 90, y: 90, width: 5, height: 5, fill: null, color: null, text: '' }
     ]
