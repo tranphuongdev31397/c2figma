@@ -7,6 +7,7 @@
     "test": "node --test",
     "import": "node src/cli.js",
     "plugin": "node src/plugin-cli.js",
-    "plugin:package": "node src/plugin-cli.js && node src/plugin-package.js"
+    "plugin:package": "node src/plugin-cli.js && node src/plugin-package.js",
+    "image": "node src/image-scene.js"
   }
 }
