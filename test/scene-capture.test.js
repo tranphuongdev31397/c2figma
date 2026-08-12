@@ -372,6 +372,53 @@ test('clicks one of a row of look-alike controls, not all twelve', () => {
   assert.match(source, /data-c2figma-force-explore/);
 });
 
+// The wording cannot catch a menu grid: fifteen dish tiles are fifteen different words, and a run
+// clicked every one for fifteen states that differed only by which tile was highlighted. Only the
+// click tells a data grid from a tab strip — both are one parent and one class, but a tab opens a
+// screen of its own size while the next row opens the same screen with other numbers in it.
+test('stops working through a grid once the clicks prove it repeats', () => {
+  const { groupTrackerFor } = load();
+  const member = (group, index) => ({ key: group + index, label: group + ' ' + index, group });
+  // walk a group, deciding each click's fate with the verdict the capture came back with
+  const walk = (group, verdicts) => {
+    const tracker = groupTrackerFor();
+    const clicked = [];
+    verdicts.forEach((familiar, index) => {
+      const action = member(group, index);
+      if (tracker.done(action)) return;
+      clicked.push(index);
+      tracker.saw(action, familiar);
+    });
+    return clicked;
+  };
+
+  // fifteen dish tiles: the first opens a screen of its own, every one after it lands on a screen
+  // the run already has. The sizes alternate (548/524/524/548…) as tiles carry a quantity, so what
+  // counts is the verdict, not the size.
+  assert.deepEqual(walk('grid', Array(15).fill(true).fill(false, 0, 1)), [0, 1, 2, 3],
+    'three familiar screens is proof; the other eleven are not worth a page load');
+
+  // the six category tabs measured beside them: only "Bánh" landed on a screen the size of another
+  assert.deepEqual(walk('bar', [false, false, false, true, false, false]), [0, 1, 2, 3, 4, 5],
+    'a tab strip opens a screen of its own each time and survives');
+
+  // the escape hatch outranks the proof
+  const forced = groupTrackerFor();
+  const stubborn = { ...member('grid', 0), force: true };
+  for (let index = 0; index < 5; index += 1) forced.saw(stubborn, true);
+  assert.equal(forced.done(stubborn), false);
+});
+
+// The settings screen renders each row in its own wrapper, so grouping by the parent element gave
+// seventeen groups of one and the proof above never ran: eleven near-identical states came back from
+// one list. The chain of tags and classes is what those rows share.
+test('groups look-alike controls that do not share a parent element', () => {
+  assert.match(source, /const groupFor/);
+  assert.doesNotMatch(source, /groupIds/, 'parent identity groups a wrapped row with nothing');
+  // element, parent and grandparent, so a row wrapped one deep still matches its siblings
+  assert.match(source, /parentElement/);
+});
+
 // A run that stops because it ran out of budget looks exactly like a run that explored everything,
 // which is how a capture missing most of its flows read as complete.
 test('says so when the click budget, not the app, ended the run', () => {

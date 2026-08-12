@@ -317,6 +317,17 @@
       return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0
         && rect.width > 0 && rect.height > 0 && rect.right >= 0 && rect.bottom >= 0;
     };
+    // Controls built from one component are a candidate repeat — only a candidate: whether the group
+    // really repeats is decided after the clicks, not here. Sharing a parent element is too strict a
+    // test for that: the settings list renders every row in its own wrapper, which made seventeen
+    // groups of one and let eleven near-identical states through. Rows built from one component share
+    // the chain of tags and classes above them even when each sits in a wrapper of its own.
+    const groupFor = element => {
+      const parent = element.parentElement;
+      const grandparent = parent && parent.parentElement;
+      const step = node => node && node.getAttribute ? node.tagName + '.' + (node.getAttribute('class') || '') : '';
+      return [step(element), step(parent), step(grandparent)].join('|');
+    };
     const discover = () => {
       const selectors = 'button,a,summary,select,input,textarea,[role="button"],[aria-expanded],[aria-haspopup],[data-action],[data-state],[onclick],[style*="cursor: pointer"]';
       const seen = new Set();
@@ -334,7 +345,7 @@
         // one of a row of look-alike controls is explored; this opts a control out of that
         // != null on purpose: an empty attribute value is still the attribute being there
         const force = element.getAttribute('data-c2figma-force-explore') != null;
-        return { element, key, force, label: (element.getAttribute('aria-label') || element.textContent || element.tagName).trim().replace(/\s+/g, ' ').slice(0, 80), trigger: 'ON_CLICK' };
+        return { element, key, force, group: groupFor(element), label: (element.getAttribute('aria-label') || element.textContent || element.tagName).trim().replace(/\s+/g, ' ').slice(0, 80), trigger: 'ON_CLICK' };
       });
     };
     // What ends this wait is the page holding still, not a clock: the same signature for CALM_MS while
@@ -392,7 +403,7 @@
         await settleAfterAction();
       }
     };
-    const listActions = () => discover().map(({ key, label, trigger, force }) => ({ key, label, trigger, force }));
+    const listActions = () => discover().map(({ key, label, trigger, force, group }) => ({ key, label, trigger, force, group }));
     return { sleep, visible, discover, waitForStable, waitForAnimations, settleAfterAction, replay, listActions };
   }
 
@@ -598,6 +609,35 @@
     return chosen;
   };
 
+  // The wording cannot catch a menu grid: fifteen dish tiles are fifteen different words, and a run
+  // clicked every one for fifteen states that differed only by which tile was highlighted. Structure
+  // groups them, but structure alone was tried and reverted — a tab strip is also one component
+  // repeated. The click is what separates them: a tab opens a screen of its own, while the next row
+  // of a grid lands on a screen the run already has.
+  //
+  // So the proof is the verdict the capture came back with, not the shape of it. Counting three
+  // siblings whose screens the run already had also survives a grid whose rows differ in size —
+  // measured on an order's dish list, the sizes alternate 548/524/524/548 as tiles carry a quantity,
+  // which defeated an earlier rule that wanted three of a size in a row. Of the six category tabs
+  // beside that grid, exactly one landed on a screen the size of another, so a tab strip is nowhere
+  // near the threshold.
+  const REPEAT_PROOF = 3;
+  const groupTracker = () => {
+    const groups = new Map();
+    const openable = action => action.group && !action.force;
+    return {
+      done: action => !!(openable(action) && (groups.get(action.group) || {}).done),
+      saw: (action, familiar) => {
+        if (!openable(action)) return false;
+        const group = groups.get(action.group) || { familiar: 0, done: false };
+        if (familiar) group.familiar += 1;
+        group.done = group.familiar >= REPEAT_PROOF;
+        groups.set(action.group, group);
+        return group.done;
+      }
+    };
+  };
+
   // maxActionsPerState has to clear a whole screen's controls or the ordering above only decides which
   // flows get dropped; 24 covers the pages measured. Depth is what a flow needs — a POS order is table
   // → order → item → action, and at 2 the run stopped before any of them finished. That leaves nothing
@@ -759,7 +799,9 @@
         } else if (settings.onNotice) {
           settings.onNotice({ type: 'deduped', into: state.id, actionPath, label });
         }
-        return { state, created };
+        // familiar: this click landed on a screen the run already had, either exactly or near enough
+        // that a same-sized twin exists. One of those is ordinary; three from one component is a grid.
+        return { state, created, familiar: !created || sized.length > 0 };
       };
       const first = (await addState([], baseline, 'Default')).state;
       const enqueue = (queue, state, actions, depth) => {
@@ -777,13 +819,19 @@
         if (!current.state) continue;
         if (expanded.has(current.state.id)) continue;
         expanded.add(current.state.id);
+        // per parent state: a grid that repeats on one screen says nothing about a grid on another
+        const grids = groupTracker();
         for (const action of actionsToRun(current.actions, tried, settings)) {
           if (progress.attempted >= settings.maxPaths) break;
+          if (grids.done(action)) continue;
           tried.add(actionSignature(action));
           const actionPath = current.state.actionPath.concat(action.key);
           const result = await attempt(actionPath);
           if (!result) continue;
           const destination = await addState(actionPath, result, action.label || action.key);
+          if (grids.saw(action, destination.familiar) && settings.onNotice) {
+            settings.onNotice({ type: 'group-repeats', from: current.state.id, label: action.label || action.key });
+          }
           const transitionKey = [current.state.id, destination.state.id, action.key].join('|');
           if (!transitionKeys.has(transitionKey)) {
             transitionKeys.add(transitionKey);
@@ -813,6 +861,7 @@
   global.explorationLimits = LIMITS;
   global.orderActionsFor = orderActions;
   global.actionsToRunFor = actionsToRun;
+  global.groupTrackerFor = groupTracker;
   global.actionSignatureFor = actionSignature;
   global.captureModes = CAPTURE_MODES;
   global.defaultCaptureMode = DEFAULT_CAPTURE_MODE;

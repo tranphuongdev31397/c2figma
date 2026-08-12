@@ -249,6 +249,7 @@
         if (notice.type === 'reuse-degraded') degraded = notice.degraded;
         if (notice.type === 'deduped') log('dedup · ' + JSON.stringify(notice.actionPath) + ' → ' + notice.into + ' (' + notice.label.slice(0, 30) + ')');
         if (notice.type === 'near-duplicate') log('near-duplicate · ' + notice.state + ' vs ' + notice.twin + ' · cùng ' + notice.nodes + ' node · khác ở: ' + notice.differsAt);
+        if (notice.type === 'group-repeats') log('lặp lại · bỏ phần còn lại của nhóm giống "' + notice.label.slice(0, 30) + '" ở ' + notice.from);
         if (notice.type === 'budget-reached') log('hết lượt click · dừng ở ' + notice.attempted + ' lượt · còn ' + notice.pending + ' màn chưa mở — tăng maxPaths nếu cần đủ flow');
       };
       try {
