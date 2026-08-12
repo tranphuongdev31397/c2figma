@@ -249,6 +249,7 @@
         if (notice.type === 'reuse-degraded') degraded = notice.degraded;
         if (notice.type === 'deduped') log('dedup · ' + JSON.stringify(notice.actionPath) + ' → ' + notice.into + ' (' + notice.label.slice(0, 30) + ')');
         if (notice.type === 'near-duplicate') log('near-duplicate · ' + notice.state + ' vs ' + notice.twin + ' · cùng ' + notice.nodes + ' node · khác ở: ' + notice.differsAt);
+        if (notice.type === 'budget-reached') log('hết lượt click · dừng ở ' + notice.attempted + ' lượt · còn ' + notice.pending + ' màn chưa mở — tăng maxPaths nếu cần đủ flow');
       };
       try {
         const graph=await captureStateGraph(html,{onProgress,onNotice,mode:$('mode').value},onState);
@@ -271,7 +272,7 @@
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; $('download').disabled=false; selected.started=false; }
       }
     }
-    $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp)';
+    $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp · tối đa '+explorationLimits.maxPaths+' lượt click)';
     $('mode').innerHTML=Object.keys(captureModes).map(key=>'<option value="'+key+'"'+(key===defaultCaptureMode?' selected':'')+'>'+(key==='fresh'?'Chính xác (iframe mới mỗi lần)':'Nhanh (dùng lại iframe)')+'</option>').join('');
     const showModeHint=()=>{$('mode-hint').textContent=captureModes[$('mode').value];};
     showModeHint();

@@ -116,10 +116,17 @@
   // ponytail: Claude bundles hydrate from internal blob resources, so every capture of one has to
   // outwait that. Both paths read the same profile — an interactive capture that settles faster than
   // the static one just times out before the page exists.
+  //
+  // The floor used to be 3s for a bundle, and an exploration pays it once per path: measured on the
+  // POS bundle, hydration finishes in 356ms, so ~2.6s of every ~8s path was spent asleep. A constant
+  // cannot know what a page needs, so it is only the shortest wait worth taking — what actually ends
+  // the wait is the page holding still for calmMs while showing something. A page that needs three
+  // seconds keeps changing for three seconds and is still waited out; one that is ready in a third of
+  // a second is no longer punished for it.
   function settleProfileFor(html) {
     const bundled = /__bundler\/(?:manifest|template|page_order)/.test(html);
-    const minimumDelay = bundled ? 3000 : 600;
-    return { bundled, minimumDelay, timeoutMs: minimumDelay + 12000 };
+    const minimumDelay = bundled ? 800 : 400;
+    return { bundled, minimumDelay, calmMs: 500, timeoutMs: minimumDelay + 12000 };
   }
 
   function captureSceneGraph(html, options = {}) {
@@ -431,19 +438,29 @@
       }).map((element, index) => {
         const key = actionKeyFor(element, index + 1);
         element.setAttribute('data-c2figma-action-key', key);
-        return { element, key, label: (element.getAttribute('aria-label') || element.textContent || element.tagName).trim().replace(/\s+/g, ' ').slice(0, 80), trigger: 'ON_CLICK' };
+        // one of a row of look-alike controls is explored; this opts a control out of that
+        // != null on purpose: an empty attribute value is still the attribute being there
+        const force = element.getAttribute('data-c2figma-force-explore') != null;
+        return { element, key, force, label: (element.getAttribute('aria-label') || element.textContent || element.tagName).trim().replace(/\s+/g, ' ').slice(0, 80), trigger: 'ON_CLICK' };
       });
     };
+    // What ends this wait is the page holding still, not a clock: the same signature for CALM_MS while
+    // it actually shows something. A bundle caught between its shell and its content is briefly empty
+    // and briefly calm, so an empty page never counts as settled however quiet it looks. This is
+    // hydration only — the wait after a click is settleAfterAction below, which is a different budget
+    // and still takes two looks, because a dialog remounts on a later tick.
+    const CALM_MS = 500;
     const waitForStable = () => new Promise(resolve => {
       const started = Date.now();
       let previous = '';
-      let stableTicks = 0;
+      let calmSince = 0;
       const check = () => {
         const signature = [document.readyState, document.querySelectorAll('*').length, document.body ? document.body.innerText : ''].join('|');
-        if (signature === previous) stableTicks += 1;
-        else { previous = signature; stableTicks = 0; }
+        const rendered = document.readyState !== 'loading' && !!document.body && document.querySelectorAll('*').length > 8;
+        if (signature === previous && rendered) calmSince = calmSince || Date.now();
+        else { previous = signature; calmSince = 0; }
         const waited = Date.now() - started;
-        if (waited >= minimumDelay && stableTicks >= 2) return resolve();
+        if (waited >= minimumDelay && calmSince && Date.now() - calmSince >= CALM_MS) return resolve();
         if (waited >= minimumDelay + 10000) return resolve();
         setTimeout(check, 40);
       };
@@ -482,7 +499,7 @@
         await settleAfterAction();
       }
     };
-    const listActions = () => discover().map(({ key, label, trigger }) => ({ key, label, trigger }));
+    const listActions = () => discover().map(({ key, label, trigger, force }) => ({ key, label, trigger, force }));
     return { sleep, visible, discover, waitForStable, waitForAnimations, settleAfterAction, replay, listActions };
   }
 
@@ -640,9 +657,62 @@
     return null;
   }
 
-  // ponytail: depth is the real ceiling — it bounds how many paths run, and paths are what cost time.
-  // A separate state cap only discarded states the run had already paid for.
-  const LIMITS = { maxDepth: 2, maxActionsPerState: 8 };
+  // Every screen of a real app repeats its nav at the top of its DOM, so taking the first N actions in
+  // document order spends a whole state's budget re-clicking what an earlier state already covered.
+  // Measured on the POS page: 21 controls on the home screen, 8 clicked; open the menu and the same
+  // nine nav items lead the list again while the drawer's own four controls sit at 22-25, so every
+  // depth-1 state spent all eight of its clicks re-opening tabs and no run ever reached "Quản lý ca".
+  //
+  // So rank by what the run has not clicked yet, counting a control by its label with digits masked —
+  // "Tất cả (12)" and "Tất cả (18)" are one control, and a badge that ticks must not make a tab look
+  // new on every screen. It only re-orders: a repeat still gets clicked, and still links its state to
+  // where it leads, whenever there is budget left after the new controls.
+  // A whole number is one token, separators and all: masking digit runs alone leaves 420.000 as
+  // ###.### and 1.240.000 as #.###.###, so two rows of the same list stop matching over a price.
+  const actionSignature = action => (action.label || action.key || '')
+    .toLowerCase().replace(/[\d.,]*\d[\d.,]*/g, '#').replace(/\s+/g, ' ').trim();
+  const orderActions = (actions, tried) => actions
+    .map((action, index) => ({ action, index, repeat: tried.has(actionSignature(action)) ? 1 : 0 }))
+    .sort((one, two) => one.repeat - two.repeat || one.index - two.index)
+    .map(item => item.action);
+
+  // A control this run already clicked elsewhere almost always lands back on a screen already
+  // captured — seven of the eight clicks in the logged run ended in a dedup — so it buys an edge, not
+  // a screen, at a whole page load each. A state gets maxRepeatsPerState of them, enough to keep the
+  // nav it shows linked, and spends the rest of its budget on what it alone offers. The ordering above
+  // is what makes this safe to cut: everything past the cap is a repeat.
+  //
+  // The same signature also settles how many of a row of look-alike controls to click. Twelve table
+  // cards produced twelve states that read identically in Figma — same layout, a different table
+  // number — and one of them says everything the design needs. Grouping them by tag and class was
+  // tried and reverted, because a tab strip is also one parent, one class, five siblings: three of
+  // five tabs stopped being explored. The wording is what tells the two apart. A tab strip is five
+  // different words and survives; a data list is one wording with the numbers moved, and collapses.
+  // ponytail: one per wording. Tabs that differ only by a number ("Tầng 1" / "Tầng 2") collapse with
+  // the data rows — put data-c2figma-force-explore on them to explore every one.
+  const actionsToRun = (actions, tried, limits) => {
+    const chosen = [];
+    const seen = new Set();
+    let repeats = 0;
+    for (const action of orderActions(actions, tried)) {
+      if (chosen.length >= limits.maxActionsPerState) break;
+      const signature = actionSignature(action);
+      if (!action.force && seen.has(signature)) continue;
+      seen.add(signature);
+      if (tried.has(signature) && (repeats += 1) > limits.maxRepeatsPerState) break;
+      chosen.push(action);
+    }
+    return chosen;
+  };
+
+  // maxActionsPerState has to clear a whole screen's controls or the ordering above only decides which
+  // flows get dropped; 24 covers the pages measured. Depth is what a flow needs — a POS order is table
+  // → order → item → action, and at 2 the run stopped before any of them finished. That leaves nothing
+  // bounding the run, so maxPaths does it directly: one path is a page load plus its clicks, so 240 is
+  // the ceiling on what a run costs. Breadth-first means the budget buys the shallow, widely-reachable
+  // screens first.
+  // ponytail: one flat budget, not a per-depth one. Raise maxPaths for a longer run.
+  const LIMITS = { maxDepth: 4, maxActionsPerState: 24, maxRepeatsPerState: 4, maxPaths: 240 };
 
   const CAPTURE_MODES = {
     fresh: 'Một iframe mới cho mỗi tương tác — chính xác nhất, chậm nhất.',
@@ -763,7 +833,7 @@
       // long stretches; report attempted paths too.
       const progress = { attempted: 0, planned: 1 };
       const report = () => settings.onProgress && settings.onProgress({
-        attempted: progress.attempted, planned: progress.planned, states: graph.states.length
+        attempted: progress.attempted, planned: Math.min(progress.planned, settings.maxPaths), states: graph.states.length
       });
       const attempt = async actionPath => {
         try { return await runner.run(actionPath); }
@@ -779,6 +849,7 @@
         // the states that survive it are the only ones worth walking node by node.
         const sized = graph.states.filter(other => other.scene.nodes.length === result.scene.nodes.length);
         let state = sized.find(other => !screenDifference(result.scene, other.scene));
+        const created = !state;
         if (!state) {
           state = { id: 'state-' + String(graph.states.length).padStart(2, '0'), label, actionPath, scene: result.scene };
           graph.states.push(state);
@@ -795,9 +866,9 @@
         } else if (settings.onNotice) {
           settings.onNotice({ type: 'deduped', into: state.id, actionPath, label });
         }
-        return state;
+        return { state, created };
       };
-      const first = await addState([], baseline, 'Default');
+      const first = (await addState([], baseline, 'Default')).state;
       const enqueue = (queue, state, actions, depth) => {
         if (depth >= settings.maxDepth) return;
         progress.planned += Math.min(actions.length, settings.maxActionsPerState);
@@ -807,24 +878,33 @@
       const queue = [];
       enqueue(queue, first, baseline.actions, 0);
       const expanded = new Set();
-      while (queue.length) {
+      const tried = new Set();
+      while (queue.length && progress.attempted < settings.maxPaths) {
         const current = queue.shift();
         if (!current.state) continue;
         if (expanded.has(current.state.id)) continue;
         expanded.add(current.state.id);
-        for (const action of current.actions.slice(0, settings.maxActionsPerState)) {
+        for (const action of actionsToRun(current.actions, tried, settings)) {
+          if (progress.attempted >= settings.maxPaths) break;
+          tried.add(actionSignature(action));
           const actionPath = current.state.actionPath.concat(action.key);
           const result = await attempt(actionPath);
           if (!result) continue;
           const destination = await addState(actionPath, result, action.label || action.key);
-          if (!destination) continue;
-          const transitionKey = [current.state.id, destination.id, action.key].join('|');
+          const transitionKey = [current.state.id, destination.state.id, action.key].join('|');
           if (!transitionKeys.has(transitionKey)) {
             transitionKeys.add(transitionKey);
-            graph.transitions.push({ from: current.state.id, to: destination.id, actionKey: action.key, trigger: 'ON_CLICK' });
+            graph.transitions.push({ from: current.state.id, to: destination.state.id, actionKey: action.key, trigger: 'ON_CLICK' });
           }
-          if (!expanded.has(destination.id)) enqueue(queue, destination, result.actions, current.depth + 1);
+          // Only a state this result created is enqueued with these actions. An action key carries the
+          // element's place in its own state's list, so pairing one state's canonical path with another
+          // path's keys asks for an action that path never had, and every child of it dies replaying.
+          if (destination.created) enqueue(queue, destination.state, result.actions, current.depth + 1);
         }
+      }
+      // A run that stopped because it ran out of clicks looks exactly like one that explored everything.
+      if (progress.attempted >= settings.maxPaths && settings.onNotice) {
+        settings.onNotice({ type: 'budget-reached', attempted: progress.attempted, pending: queue.length });
       }
       runner.dispose();
       graph.capture = { mode, attempted: progress.attempted, degraded: runner.degradedCount() };
@@ -838,6 +918,9 @@
   global.settleProfileFor = settleProfileFor;
   global.sceneFingerprintFor = sceneFingerprint;
   global.explorationLimits = LIMITS;
+  global.orderActionsFor = orderActions;
+  global.actionsToRunFor = actionsToRun;
+  global.actionSignatureFor = actionSignature;
   global.captureModes = CAPTURE_MODES;
   global.defaultCaptureMode = DEFAULT_CAPTURE_MODE;
 })(window);
@@ -1182,6 +1265,7 @@ setTimeout(boot, 0);`;
         if (notice.type === 'reuse-degraded') degraded = notice.degraded;
         if (notice.type === 'deduped') log('dedup · ' + JSON.stringify(notice.actionPath) + ' → ' + notice.into + ' (' + notice.label.slice(0, 30) + ')');
         if (notice.type === 'near-duplicate') log('near-duplicate · ' + notice.state + ' vs ' + notice.twin + ' · cùng ' + notice.nodes + ' node · khác ở: ' + notice.differsAt);
+        if (notice.type === 'budget-reached') log('hết lượt click · dừng ở ' + notice.attempted + ' lượt · còn ' + notice.pending + ' màn chưa mở — tăng maxPaths nếu cần đủ flow');
       };
       try {
         const graph=await captureStateGraph(html,{onProgress,onNotice,mode:$('mode').value},onState);
@@ -1204,7 +1288,7 @@ setTimeout(boot, 0);`;
         catch (fallbackError) { $('stats').textContent='Không dựng được layout'; $('status').textContent='Lỗi: '+fallbackError.message; $('download').disabled=false; selected.started=false; }
       }
     }
-    $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp)';
+    $('state-limit').textContent='(sâu '+explorationLimits.maxDepth+' cấp · tối đa '+explorationLimits.maxPaths+' lượt click)';
     $('mode').innerHTML=Object.keys(captureModes).map(key=>'<option value="'+key+'"'+(key===defaultCaptureMode?' selected':'')+'>'+(key==='fresh'?'Chính xác (iframe mới mỗi lần)':'Nhanh (dùng lại iframe)')+'</option>').join('');
     const showModeHint=()=>{$('mode-hint').textContent=captureModes[$('mode').value];};
     showModeHint();

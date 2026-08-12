@@ -5,3 +5,5 @@ node_modules/
 !web/downloads/html-figma-importer.zip
 __pycache__/
 bench/fixtures/**/scene*.json
+.playwright-mcp
+dist

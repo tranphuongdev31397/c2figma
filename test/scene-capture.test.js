@@ -25,6 +25,24 @@ test('gives a bundled page the same settle budget on both capture paths', () => 
   assert.ok(plain.timeoutMs > plain.minimumDelay);
 });
 
+// The floor was 3s for a bundled page and every path in a run pays it. Measured on the POS bundle,
+// the app hydrates in 356ms — so an eight-second path spent most of its life asleep. A floor cannot
+// know how long a page needs; a page that is still changing has to say so itself.
+test('waits for the page to go quiet rather than sleeping a fixed floor', () => {
+  const { settleProfileFor } = load();
+  const bundled = settleProfileFor('<div data-src="/__bundler/manifest.json"></div>');
+
+  assert.ok(bundled.minimumDelay <= 1000, 'a floor above a second is dead time on every path');
+  assert.ok(bundled.calmMs >= 400, 'but the page has to hold still long enough to prove it hydrated');
+  // the probe is serialized into the iframe, so its calm window is its own constant — and a profile
+  // that no longer describes what the probe does is worse than no profile
+  assert.equal(Number(source.match(/const CALM_MS = (\d+)/)[1]), bundled.calmMs);
+  // a page mid-hydration must not read as quiet just because it is briefly empty and briefly still
+  assert.match(source, /signature === previous && rendered/);
+  // the post-click settle is a different budget and keeps its two looks: a dialog remounts a tick later
+  assert.match(source, /while \(calm < 2 && Date\.now\(\) < deadline\)/);
+});
+
 test('waits for running animations to finish before capturing a state', () => {
   // ponytail: a fixed sleep captures a modal mid-fade, which both blurs the layer and
   // makes every replay of the same action fingerprint differently.
@@ -256,9 +274,12 @@ test('caps how long one action may wait to settle', () => {
   assert.ok(budget, 'the settle needs a stated ceiling');
   const perAction = Number(budget[1]);
   assert.ok(perAction <= 2000, 'a single action must not eat seconds');
-  // two actions deep plus hydration still has to fit inside the path timeout
+  // the deepest path plus hydration still has to fit inside the path timeout — a run that explores
+  // four clicks deep times every one of them out otherwise, which is how animated states stopped existing
   const profile = settleProfileFor('<div data-src="/__bundler/manifest.json"></div>');
-  assert.ok(profile.minimumDelay + perAction * 2 < profile.timeoutMs, 'settling must fit the path budget');
+  const { explorationLimits } = load();
+  assert.ok(profile.minimumDelay + profile.calmMs + perAction * explorationLimits.maxDepth < profile.timeoutMs,
+    'settling must fit the path budget at full depth');
   assert.match(source, /SETTLE_BUDGET_MS/);
 });
 
@@ -267,8 +288,95 @@ test('bounds exploration by depth rather than by a state count', () => {
 
   // a state cap discards states the run already paid for without shortening the run
   assert.equal(explorationLimits.maxStates, undefined);
-  assert.ok(explorationLimits.maxDepth >= 2);
-  assert.ok(explorationLimits.maxActionsPerState > 0);
+  assert.ok(explorationLimits.maxDepth >= 4, 'two clicks deep stops before most flows begin');
+  // measured: the POS home screen offers 21 controls and every screen behind it 25, so a cap of 8
+  // could not reach a screen's own content however the list was ordered
+  assert.ok(explorationLimits.maxActionsPerState >= 24);
+  // depth alone no longer bounds the run, so the run needs its own ceiling
+  assert.ok(explorationLimits.maxPaths > 0);
+});
+
+// Measured on the POS page: 21 controls on the home screen, 8 clicked. Opening the menu offers 25,
+// and the first nine are the same nav items depth 0 already clicked — the drawer's own four controls
+// sit at 22-25, so every depth-1 state spent all eight of its clicks re-opening the same tabs and no
+// run ever opened "Quản lý ca". Rank by what the run has not clicked yet, so a cap that bites drops a
+// repeat instead of a flow.
+test('spends the click budget on controls the run has not clicked yet', () => {
+  const { orderActionsFor, actionSignatureFor } = load();
+  const control = label => ({ key: 'action-' + label.toLowerCase().replace(/\W+/g, '-'), label });
+  const nav = ['Menu', 'Đơn hàng 18', 'Sơ đồ bàn 6', 'Trả món 10', 'Phiếu tạm tính 3', 'Tất cả (12)'].map(control);
+  const tables = ['Bàn 01', 'Bàn 02', 'Bàn 03'].map(control);
+  const drawer = ['Đóng menu', 'Quản lý ca', 'Cài đặt', 'Đổi cửa hàng / đăng xuất'].map(control);
+  const tried = new Set();
+  const spend = (actions, budget) => orderActionsFor(actions, tried).slice(0, budget)
+    .map(action => { tried.add(actionSignatureFor(action)); return action.label; });
+
+  // depth 0 sees the home screen and can afford six of its nine controls
+  assert.deepEqual(spend([...nav, ...tables], 6), nav.map(action => action.label));
+  // depth 1 opens the menu: nav leads its DOM order again, the drawer trails it
+  const next = spend([...nav, ...tables, ...drawer], 6);
+  assert.deepEqual(next, [...tables, ...drawer].slice(0, 6).map(action => action.label),
+    'the controls this screen added come before the nav the run already clicked');
+  assert.equal(next.filter(label => nav.some(action => action.label === label)).length, 0);
+
+  // a counter in the label is the same control either way, or every revisit looks new
+  assert.equal(actionSignatureFor(control('Tất cả (12)')), actionSignatureFor(control('Tất cả (18)')));
+  assert.notEqual(actionSignatureFor(control('Tất cả (12)')), actionSignatureFor(control('Tầng 1 (6)')));
+  // and a price is one number however many separators it carries, or two rows of one list part over it
+  assert.equal(actionSignatureFor(control('Bàn 01 420.000 5 món')), actionSignatureFor(control('Bàn 11 1.240.000 12 món')));
+  assert.notEqual(actionSignatureFor(control('Bàn 01 420.000 5 món')), actionSignatureFor(control('Bàn 02 Còn trống')));
+});
+
+// Clicking the nav again from a screen that already has it lands on a screen the run captured long
+// ago — seven of the eight clicks in the logged run ended in a dedup. It buys an edge, not a screen,
+// at a full page load each, so a state gets a few of them and spends the rest on what it alone offers.
+test('rations the clicks that only lead back to screens already captured', () => {
+  const { actionsToRunFor, actionSignatureFor, explorationLimits } = load();
+  const control = label => ({ key: 'action-' + label, label });
+  const nav = ['Menu', 'Đơn hàng', 'Sơ đồ bàn', 'Trả món', 'Phiếu tạm tính', 'QN Quán', 'Tất cả', 'Tầng 1', 'Tầng 2'].map(control);
+  const own = ['Đóng menu', 'Quản lý ca', 'Cài đặt'].map(control);
+  const tried = new Set(nav.map(actionSignatureFor));
+
+  // spread it: the helper builds its list inside the vm realm, and deepEqual compares prototypes
+  const run = [...actionsToRunFor([...nav, ...own], tried, explorationLimits)].map(action => action.label);
+  assert.deepEqual(run.slice(0, 3), own.map(action => action.label), 'this screen’s own controls come first');
+  assert.equal(run.length, own.length + explorationLimits.maxRepeatsPerState);
+  assert.ok(explorationLimits.maxRepeatsPerState >= 1, 'a screen still links back to the nav it shows');
+
+  // nothing tried yet: the cap must not bite what has never been clicked ("Tầng 1"/"Tầng 2" are one
+  // wording, and collapse for that reason rather than this one)
+  const distinct = new Set([...nav, ...own].map(actionSignatureFor)).size;
+  assert.equal([...actionsToRunFor([...nav, ...own], new Set(), explorationLimits)].length, distinct);
+});
+
+// Twelve table cards on one screen produced twelve states that read identically in Figma — same
+// layout, a different table number. An earlier attempt grouped look-alike controls by tag and class
+// and had to be reverted: a tab strip is also one parent, one class, five siblings, so three of five
+// tabs stopped being explored. Wording tells them apart where structure cannot — tabs are five
+// different words, a data list is one wording with different numbers in it.
+test('clicks one of a row of look-alike controls, not all twelve', () => {
+  const { actionsToRunFor, explorationLimits } = load();
+  const control = label => ({ key: 'action-' + label, label });
+  const tabs = ['Tất cả', 'Cơm', 'Phở & Bún', 'Đồ uống', 'Bánh'].map(control);
+  const tables = ['Bàn 01 420.000 52 phút · 5 món', 'Bàn 02 Còn trống', 'Bàn 03 185.000 24 phút · 3 món',
+    'Bàn 04 Còn trống', 'Bàn 05 468.000 40 phút · 9 món', 'Bàn 11 1.240.000 69 phút · 12 món'].map(control);
+  const run = [...actionsToRunFor([...tabs, ...tables], new Set(), explorationLimits)].map(action => action.label);
+
+  assert.deepEqual(run.slice(0, tabs.length), tabs.map(action => action.label), 'every tab is its own screen');
+  // an occupied table and a free one are different screens; a second occupied table is not
+  assert.deepEqual(run.slice(tabs.length), ['Bàn 01 420.000 52 phút · 5 món', 'Bàn 02 Còn trống']);
+
+  // the escape hatch CLAUDE.md promises has to actually escape
+  const forced = tables.map(action => ({ ...action, force: true }));
+  assert.equal([...actionsToRunFor(forced, new Set(), explorationLimits)].length, tables.length);
+  assert.match(source, /data-c2figma-force-explore/);
+});
+
+// A run that stops because it ran out of budget looks exactly like a run that explored everything,
+// which is how a capture missing most of its flows read as complete.
+test('says so when the click budget, not the app, ended the run', () => {
+  assert.match(source, /budget-reached/);
+  assert.match(source, /maxPaths/);
 });
 
 test('offers a reused-iframe mode without making it the default', () => {
